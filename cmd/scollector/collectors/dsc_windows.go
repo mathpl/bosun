@@ -10,6 +10,7 @@ import (
 
 func init() {
 	collectors = append(collectors, &IntervalCollector{F: c_dsc_mof, Interval: time.Minute * 5})
+	collectors = append(collectors, &IntervalCollector{F: c_dsc_status, Interval: time.Minute * 5})
 }
 
 const (
@@ -60,3 +61,59 @@ const (
 	descDSCMofSize       = "Size of the mof file in bytes or -1 if file does not exist."
 	descDSCMofModified   = "Number of seconds since the mof file was last modified or -1 if file does not exist."
 )
+
+func c_dsc_status() (opentsdb.MultiDataPoint, error) {
+	var md opentsdb.MultiDataPoint
+	if _, err := os.Stat(dscpath + "MetaConfig.mof"); os.IsNotExist(err) {
+		continue
+	}
+
+	//We can't use the normal query syntax, as the default "intances" don't exist.
+	//var dsc []MSFT_DSCConfigurationStatus
+	//var q = wmi.CreateQuery(&dsc, "")
+	//err := queryWmi(q, &dst)
+	//if err != nil {
+	//	return nil, err
+	//}
+
+	//Instead we need to modify "github.com/stackexchange/wmi" to allow us tocall a static method on the MSFT_DSCLocalConfigurationManager class
+	//The MSFT_DSCLocalConfigurationManager.GetConfigurationStatus() method returns a Microsoft.Management.Infrastructure.CimMethodResult#MSFT_DSCLocalConfigurationManager#GetConfigurationStatus
+	//object (at least in powershell it does), which has a ReturnValue property that is a MSFT_DSCConfigurationStatus instance.
+
+	//Powershell that works on ny-rdp01
+	//$dsclcm = Get-CimClass -Namespace ROOT\Microsoft\Windows\DesiredStateConfiguration MSFT_DSCLocalConfigurationManager
+	//icim -CimClass $dsclcm -MethodName GetConfigurationStatus -ComputerName localhost | select -ExpandProperty ConfigurationStatus | fl *
+
+}
+
+const (
+	descWinDSCDurationInSeconds          = "Time taken to process entire configuration."
+	descWinDSCError                      = "Error encountered in local configuration manager during configuration."
+	descWinDSCLCMVersion                 = "Version of LCM at time of configuration."
+	descWinDSCMetaConfiguration          = "Meta-Configuration information at time of configuration."
+	descWinDSCMetaData                   = "Meta data of configuration."
+	descWinDSCMode                       = "Mode of configuration."
+	descWinDSCNumberOfResources          = "Total number of resources in configuration."
+	descWinDSCRebootRequested            = "Reboot was requested during configuration."
+	descWinDSCResourcesInDesiredState    = "Resources successfully configured in the configuration."
+	descWinDSCResourcesNotInDesiredState = "Resources failed in the configuration."
+	descWinDSCStartDate                  = "Date and time when the configuration was started."
+	descWinDSCStatus                     = "Status of configuration."
+	descWinDSCType                       = "Type of Configuration."
+)
+
+type MSFT_DSCConfigurationStatus struct {
+	DurationInSeconds uint32
+	Error             string
+	LCMVersion        string
+	//MetaConfiguration object:MSFT_DSCMetaConfiguration
+	MetaData          string
+	Mode              string
+	NumberOfResources uint32
+	RebootRequested   boolean
+	//ResourcesInDesiredState object:MSFT_ResourceInDesiredState
+	//ResourcesNotInDesiredState object:MSFT_ResourceNotInDesiredState
+	StartDate string
+	Status    string
+	Type      string
+}
