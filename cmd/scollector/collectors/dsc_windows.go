@@ -69,21 +69,46 @@ func c_dsc_status() (opentsdb.MultiDataPoint, error) {
 	}
 
 	//We can't use the normal query syntax, as the default "intances" don't exist.
-	//var dsc []MSFT_DSCConfigurationStatus
-	//var q = wmi.CreateQuery(&dsc, "")
-	//err := queryWmi(q, &dst)
-	//if err != nil {
-	//	return nil, err
-	//}
+	var dsc MSFT_DSCConfigurationStatus
 
 	//Instead we need to modify "github.com/stackexchange/wmi" to allow us tocall a static method on the MSFT_DSCLocalConfigurationManager class
 	//The MSFT_DSCLocalConfigurationManager.GetConfigurationStatus() method returns a Microsoft.Management.Infrastructure.CimMethodResult#MSFT_DSCLocalConfigurationManager#GetConfigurationStatus
 	//object (at least in powershell it does), which has a ReturnValue property that is a MSFT_DSCConfigurationStatus instance.
 
+	//See Calling a Provider Method Using Scripting at https://msdn.microsoft.com/en-us/library/aa384833(v=vs.85).aspx
+
 	//Powershell that works on ny-rdp01
 	//$dsclcm = Get-CimClass -Namespace ROOT\Microsoft\Windows\DesiredStateConfiguration MSFT_DSCLocalConfigurationManager
 	//icim -CimClass $dsclcm -MethodName GetConfigurationStatus -ComputerName localhost | select -ExpandProperty ConfigurationStatus | fl *
 
+	//Or use wmic to get the results in Managed Object format (MOF)
+	//wmic /namespace:\\ROOT\Microsoft\Windows\DesiredStateConfiguration class MSFT_DSCLocalConfigurationManager call GetConfigurationStatus
+	//See example output: http://chat.meta.stackexchange.com/files/318/e6b7d115a650407f98573da4de341943/ny-web01-msft-dsclocalconfigurationmanager-getconfigurationstatus-txt
+
+	dscstatus, err := util.Command(time.Minute, nil, "wmic",
+		`/namespace:\\ROOT\Microsoft\Windows\DesiredStateConfiguration`, "class",
+		"MSFT_DSCLocalConfigurationManager", "call", " GetConfigurationStatus")
+	if err != nil {
+		return nil, err
+	}
+		f := strings.SplitN(line, " = ", 2)
+		if len(f) != 2 {
+			if line = "instance of MSFT_ResourceInDesiredState"{
+
+			}
+			return nil
+		}
+		f[0] = strings.TrimSpace(f[0])
+		f[1] = strings.TrimSpace(f[1])
+		switch f[0] {
+		case "Stratum":
+			sf := strings.Fields(f[1])
+			if len(sf) < 1 {
+				return fmt.Errorf("Unexpected value for stratum")
+			}
+			stratum = sf[0]
+		case "Root Delay":
+	} "wmic", `/namespace:\\ROOT\Microsoft\Windows\DesiredStateConfiguration`, "class", "MSFT_DSCLocalConfigurationManager", "call", " GetConfigurationStatus"
 }
 
 const (
