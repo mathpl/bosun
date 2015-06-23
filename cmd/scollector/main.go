@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	flagHost            = flag.String("h", "", "OpenTSDB or Bosun host to send data. Overrides Host in conf file.")
+	flagHost            = flag.String("h", "", "OpenTSDB or Bosun host(s) to send data. Comma delimitedi Overrides Host in conf file.")
 	flagFilter          = flag.String("f", "", "Filters collectors matching these terms, separated by comma. Overrides Filter in conf file.")
 	flagList            = flag.Bool("l", false, "List available collectors.")
 	flagPrint           = flag.Bool("p", false, "Print to screen instead of sending to a host")
@@ -251,7 +251,7 @@ func main() {
 		}
 	}
 	cdp := collectors.Run(c)
-	if u != nil {
+	if len(u) >= 1 {
 		slog.Infoln("OpenTSDB host:", u)
 	}
 	if err := collect.InitChan(u, "scollector", cdp); err != nil {
@@ -321,18 +321,24 @@ func list(cs []collectors.Collector) {
 	}
 }
 
-func parseHost(host string) (*url.URL, error) {
-	if !strings.Contains(host, "//") {
-		host = "http://" + host
+func parseHost(host string) ([]*url.URL, error) {
+	splitUrls := strings.Split(host, ",")
+	urls := make([]*url.URL, len(splitUrls))
+	urlsSlice := urls[0:0]
+	for _, singleUrl := range splitUrls {
+		if !strings.Contains(singleUrl, "//") {
+			singleUrl = "http://" + singleUrl
+		}
+		u, err := url.Parse(singleUrl)
+		if err != nil {
+			return nil, err
+		}
+		if u.Host == "" {
+			return nil, fmt.Errorf("no host specified")
+		}
+		urlsSlice = append(urlsSlice, u)
 	}
-	u, err := url.Parse(host)
-	if err != nil {
-		return nil, err
-	}
-	if u.Host == "" {
-		return nil, fmt.Errorf("no host specified")
-	}
-	return u, nil
+	return urlsSlice, nil
 }
 
 func printPut(c chan *opentsdb.DataPoint) {
