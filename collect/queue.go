@@ -78,7 +78,7 @@ func sendBatch(batch []json.RawMessage) {
 		slog.Error(err)
 		return
 	}
-	req, err := http.NewRequest("POST", tsdbURL, &buf)
+	req, err := http.NewRequest("POST", tsdbURLs[currentTsdbURL], &buf)
 	if err != nil {
 		slog.Error(err)
 		return
@@ -98,6 +98,8 @@ func sendBatch(batch []json.RawMessage) {
 		if err != nil {
 			Add("collect.post.error", Tags, 1)
 			slog.Error(err)
+			// Switch endpoint if possible
+			currentTsdbURL = (currentTsdbURL + 1) % len(tsdbURLs)
 		} else if resp.StatusCode != http.StatusNoContent {
 			Add("collect.post.bad_status", Tags, 1)
 			slog.Errorln(resp.Status)
@@ -108,6 +110,8 @@ func sendBatch(batch []json.RawMessage) {
 			if len(body) > 0 {
 				slog.Error(string(body))
 			}
+			// Switch endpoint if possible
+			currentTsdbURL = (currentTsdbURL + 1) % len(tsdbURLs)
 		}
 		restored := 0
 		for _, msg := range batch {

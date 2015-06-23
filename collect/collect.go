@@ -50,7 +50,8 @@ var (
 	sent int64
 
 	tchan               chan *opentsdb.DataPoint
-	tsdbURL             string
+	tsdbURLs            []string
+	currentTsdbURL      int
 	osHostname          string
 	metricRoot          string
 	queue               []json.RawMessage
@@ -92,21 +93,26 @@ func (t *timeoutTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // InitChan is similar to Init, but uses the given channel instead of creating a
 // new one.
-func InitChan(tsdbhost *url.URL, root string, ch chan *opentsdb.DataPoint) error {
+func InitChan(tsdbhosts []*url.URL, root string, ch chan *opentsdb.DataPoint) error {
 	if tchan != nil {
 		return fmt.Errorf("cannot init twice")
 	}
 	if err := checkClean(root, "metric root"); err != nil {
 		return err
 	}
-	u, err := tsdbhost.Parse("/api/put")
-	if err != nil {
-		return err
+	tsdbURLs = make([]string, len(tsdbhosts))
+	tsdbURLsSlice := tsdbURLs[0:0]
+	for _, urls := range tsdbhosts {
+		u, err := urls.Parse("/api/put")
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(u.Host, ":") {
+			u.Host = "localhost" + u.Host
+		}
+		tsdbURLsSlice = append(tsdbURLsSlice, u.String())
 	}
-	if strings.HasPrefix(u.Host, ":") {
-		u.Host = "localhost" + u.Host
-	}
-	tsdbURL = u.String()
+	currentTsdbURL = 0
 	metricRoot = root + "."
 	tchan = ch
 	go queuer()
@@ -156,8 +162,8 @@ func InitChan(tsdbhost *url.URL, root string, ch chan *opentsdb.DataPoint) error
 
 // Init sets up the channels and the queue for sending data to OpenTSDB. It also
 // sets up the basename for all metrics.
-func Init(tsdbhost *url.URL, root string) error {
-	return InitChan(tsdbhost, root, make(chan *opentsdb.DataPoint))
+func Init(tsdbhosts []*url.URL, root string) error {
+	return InitChan(tsdbhosts, root, make(chan *opentsdb.DataPoint))
 }
 
 func SetHostname(host string) error {
