@@ -94,7 +94,7 @@ func sendBatch(batch []json.RawMessage) {
 	Add("collect.post.total_duration", Tags, d)
 	Add("collect.post.count", Tags, 1)
 	// Some problem with connecting to the server; retry later.
-	if err != nil || (resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.Status) {
+	if err != nil || (resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK) {
 		if err != nil {
 			Add("collect.post.error", Tags, 1)
 			slog.Error(err)
