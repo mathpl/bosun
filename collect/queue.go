@@ -100,7 +100,7 @@ func sendBatch(batch []json.RawMessage) {
 			slog.Error(err)
 			// Switch endpoint if possible
 			currentTsdbURL = (currentTsdbURL + 1) % len(tsdbURLs)
-		} else if resp.StatusCode != http.StatusNoContent {
+		} else if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 			Add("collect.post.bad_status", Tags, 1)
 			slog.Errorln(resp.Status)
 			body, err := ioutil.ReadAll(resp.Body)
