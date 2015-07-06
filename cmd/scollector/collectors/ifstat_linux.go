@@ -9,6 +9,13 @@ import (
 	"bosun.org/util"
 )
 
+func AddIfstatConfig(ifaceExpr string) (err error) {
+	if ifaceExpr != "" {
+		ifstatRE, err = regexp.Compile(ifaceExpr)
+	}
+	return err
+}
+
 func init() {
 	collectors = append(collectors, &IntervalCollector{F: c_ifstat_linux})
 	collectors = append(collectors, &IntervalCollector{F: c_ipcount_linux})

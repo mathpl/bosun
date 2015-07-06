@@ -59,6 +59,8 @@ type Conf struct {
 	Freq int
 	// Filter filters collectors matching these terms.
 	Filter []string
+	//Override default network interface expression
+	IfaceExpr string
 
 	// KeepalivedCommunity, if not empty, enables the Keepalived collector with
 	// the specified community.
@@ -221,6 +223,7 @@ func main() {
 			check(collectors.HTTPUnitHiera(h.Hiera))
 		}
 	}
+	check(collectors.AddIfstatConfig(conf.IfaceExpr))
 	if err != nil {
 		slog.Fatal(err)
 	}
