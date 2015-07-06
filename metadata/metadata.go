@@ -120,11 +120,12 @@ func (m Metakey) TagSet() opentsdb.TagSet {
 }
 
 var (
-	metadata  = make(map[Metakey]interface{})
-	metalock  sync.Mutex
-	metahost  string
-	metafuncs []func()
-	metadebug bool
+	metadata        = make(map[Metakey]interface{})
+	metalock        sync.Mutex
+	metahosts       []string
+	currentmetahost int
+	metafuncs       []func()
+	metadebug       bool
 )
 
 // AddMeta adds a metadata entry to memory, which is queued for later sending.
@@ -167,12 +168,17 @@ func AddMetricMeta(metric string, rate RateType, unit Unit, desc string) {
 }
 
 // Init initializes the metadata send queue.
-func Init(u *url.URL, debug bool) error {
-	mh, err := u.Parse("/api/metadata/put")
-	if err != nil {
-		return err
+func Init(u []*url.URL, debug bool) error {
+	metahosts = make([]string, len(u))
+	metahostsSlice := metahosts[0:0]
+	for _, singleUrl := range u {
+		mh, err := singleUrl.Parse("/api/metadata/put")
+		if err != nil {
+			return err
+		}
+		currentmetahost = 0
+		metahostsSlice = append(metahostsSlice, mh.String())
 	}
-	metahost = mh.String()
 	metadebug = debug
 	go collectMetadata()
 	return nil
@@ -223,12 +229,13 @@ func sendMetadata(ms []Metasend) {
 		slog.Error(err)
 		return
 	}
-	resp, err := http.Post(metahost, "application/json", bytes.NewBuffer(b))
+	resp, err := http.Post(metahosts[currentmetahost], "application/json", bytes.NewBuffer(b))
 	if err != nil {
 		slog.Error(err)
+		currentmetahost = (currentmetahost + 1) % len(metahosts)
 		return
 	}
-	if resp.StatusCode != 204 {
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		slog.Errorln("bad metadata return:", resp.Status)
 		return
 	}
