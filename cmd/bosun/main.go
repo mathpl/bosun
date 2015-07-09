@@ -80,7 +80,8 @@ func main() {
 	if strings.HasPrefix(httpListen.Host, ":") {
 		httpListen.Host = "localhost" + httpListen.Host
 	}
-	if err := metadata.Init(httpListen, false); err != nil {
+	httpListens := []*url.URL{httpListen}
+	if err := metadata.Init(httpListens, false); err != nil {
 		log.Fatal(err)
 	}
 	if err := sched.Load(c); err != nil {
@@ -98,7 +99,7 @@ func main() {
 		}()
 	}
 	if c.TSDBHost != "" {
-		if err := collect.Init(httpListen, "bosun"); err != nil {
+		if err := collect.Init(httpListens, "bosun"); err != nil {
 			log.Fatal(err)
 		}
 		tsdbHost := &url.URL{
