@@ -15,6 +15,8 @@ type Silence struct {
 	Alert      string
 	Tags       opentsdb.TagSet
 	Forget     bool
+	User       string
+	Message    string
 }
 
 func (s *Silence) MarshalJSON() ([]byte, error) {
@@ -23,12 +25,16 @@ func (s *Silence) MarshalJSON() ([]byte, error) {
 		Alert      string
 		Tags       string
 		Forget     bool
+		User       string
+		Message    string
 	}{
-		Start:  s.Start,
-		End:    s.End,
-		Alert:  s.Alert,
-		Tags:   s.Tags.Tags(),
-		Forget: s.Forget,
+		Start:   s.Start,
+		End:     s.End,
+		Alert:   s.Alert,
+		Tags:    s.Tags.Tags(),
+		Forget:  s.Forget,
+		User:    s.User,
+		Message: s.Message,
 	})
 }
 
@@ -67,7 +73,7 @@ func (s Silence) ID() string {
 func (s *Schedule) Silenced() map[expr.AlertKey]Silence {
 	aks := make(map[expr.AlertKey]Silence)
 	now := time.Now()
-	s.Lock()
+	s.Lock("Silenced")
 	for _, si := range s.Silence {
 		for ak := range s.status {
 			if si.Silenced(now, ak.Name(), ak.Group()) {
@@ -81,7 +87,7 @@ func (s *Schedule) Silenced() map[expr.AlertKey]Silence {
 	return aks
 }
 
-func (s *Schedule) AddSilence(start, end time.Time, alert, tagList string, forget, confirm bool, edit string) (map[expr.AlertKey]bool, error) {
+func (s *Schedule) AddSilence(start, end time.Time, alert, tagList string, forget, confirm bool, edit, user, message string) (map[expr.AlertKey]bool, error) {
 	if start.IsZero() || end.IsZero() {
 		return nil, fmt.Errorf("both start and end must be specified")
 	}
@@ -95,11 +101,13 @@ func (s *Schedule) AddSilence(start, end time.Time, alert, tagList string, forge
 		return nil, fmt.Errorf("must specify either alert or tags")
 	}
 	si := &Silence{
-		Start:  start,
-		End:    end,
-		Alert:  alert,
-		Tags:   make(opentsdb.TagSet),
-		Forget: forget,
+		Start:   start,
+		End:     end,
+		Alert:   alert,
+		Tags:    make(opentsdb.TagSet),
+		Forget:  forget,
+		User:    user,
+		Message: message,
 	}
 	if tagList != "" {
 		tags, err := opentsdb.ParseTags(tagList)
@@ -108,7 +116,7 @@ func (s *Schedule) AddSilence(start, end time.Time, alert, tagList string, forge
 		}
 		si.Tags = tags
 	}
-	s.Lock()
+	s.Lock("AddSilence")
 	defer s.Unlock()
 	if confirm {
 		delete(s.Silence, edit)
@@ -126,7 +134,7 @@ func (s *Schedule) AddSilence(start, end time.Time, alert, tagList string, forge
 }
 
 func (s *Schedule) ClearSilence(id string) error {
-	s.Lock()
+	s.Lock("ClearSilence")
 	delete(s.Silence, id)
 	s.Unlock()
 	s.Save()

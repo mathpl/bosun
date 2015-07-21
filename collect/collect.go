@@ -5,12 +5,13 @@
 package collect // import "bosun.org/collect"
 
 import (
-	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,7 @@ var (
 	MaxQueueLen = 200000
 
 	// BatchSize is the maximum length of data points sent at once to OpenTSDB.
-	BatchSize = 250
+	BatchSize = 500
 
 	// Debug enables debug logging.
 	Debug = false
@@ -54,11 +55,12 @@ var (
 	currentTsdbURL      int
 	osHostname          string
 	metricRoot          string
-	queue               []json.RawMessage
+	queue               []*opentsdb.DataPoint
 	qlock, mlock, slock sync.Mutex // Locks for queues, maps, stats.
 	counters            = make(map[string]*addMetric)
 	sets                = make(map[string]*setMetric)
 	puts                = make(map[string]*putMetric)
+	aggs                = make(map[string]*agMetric)
 	client              = &http.Client{
 		Transport: &timeoutTransport{Transport: new(http.Transport)},
 		Timeout:   time.Minute,
@@ -66,16 +68,17 @@ var (
 )
 
 const (
-	descCollectDropped      = "Counter of dropped data points due to the queue being full."
-	descCollectSent         = "Counter of data points sent to the server."
-	descCollectQueued       = "Total number of items currently queued and waiting to be sent to the server."
-	descCollectAlloc        = "Total number of bytes allocated and still in use by the runtime (via runtime.ReadMemStats)."
-	descCollectGoRoutines   = "Total number of goroutines that currently exist (via runtime.NumGoroutine)."
-	descCollectPostDuration = "Total number of milliseconds it took to send an HTTP POST request to the server."
-	descCollectPostCount    = "Counter of batches sent to the server."
-	descCollectPostError    = "Counter of errors received when sending a batch to the server."
-	descCollectPostBad      = "Counter of HTTP POST requests where resp.StatusCode != http.StatusNoContent."
-	descCollectPostRestore  = "Counter of data points restored from batches that could not be sent to the server."
+	descCollectAlloc             = "Total number of bytes allocated and still in use by the runtime (via runtime.ReadMemStats)."
+	descCollectDropped           = "Counter of dropped data points due to the queue being full."
+	descCollectGoRoutines        = "Total number of goroutines that currently exist (via runtime.NumGoroutine)."
+	descCollectPostBad           = "Counter of HTTP POST requests where resp.StatusCode != http.StatusNoContent."
+	descCollectPostCount         = "Counter of batches sent to the server."
+	descCollectPostDuration      = "How many milliseconds it took to send HTTP POST requests to the server."
+	descCollectPostError         = "Counter of errors received when sending a batch to the server."
+	descCollectPostRestore       = "Counter of data points restored from batches that could not be sent to the server."
+	descCollectPostTotalDuration = "Total number of milliseconds it took to send an HTTP POST request to the server."
+	descCollectQueued            = "Total number of items currently queued and waiting to be sent to the server."
+	descCollectSent              = "Counter of data points sent to the server."
 )
 
 type timeoutTransport struct {
@@ -152,7 +155,8 @@ func InitChan(tsdbhosts []*url.URL, root string, ch chan *opentsdb.DataPoint) er
 	metadata.AddMetricMeta(metricRoot+"collect.queued", metadata.Gauge, metadata.Item, descCollectQueued)
 	metadata.AddMetricMeta(metricRoot+"collect.alloc", metadata.Gauge, metadata.Bytes, descCollectAlloc)
 	metadata.AddMetricMeta(metricRoot+"collect.goroutines", metadata.Gauge, metadata.Count, descCollectGoRoutines)
-	metadata.AddMetricMeta(metricRoot+"collect.post.total_duration", metadata.Counter, metadata.MilliSecond, descCollectPostDuration)
+	metadata.AddMetricMeta(metricRoot+"collect.post.total_duration", metadata.Counter, metadata.MilliSecond, descCollectPostTotalDuration)
+	AggregateMeta(metricRoot+"collect.post.duration", metadata.MilliSecond, descCollectPostDuration)
 	metadata.AddMetricMeta(metricRoot+"collect.post.count", metadata.Counter, metadata.PerSecond, descCollectPostCount)
 	metadata.AddMetricMeta(metricRoot+"collect.post.error", metadata.Counter, metadata.PerSecond, descCollectPostError)
 	metadata.AddMetricMeta(metricRoot+"collect.post.bad_status", metadata.Counter, metadata.PerSecond, descCollectPostBad)
@@ -183,6 +187,103 @@ func setHostName() error {
 	if err := checkClean(osHostname, "host tag"); err != nil {
 		return err
 	}
+	return nil
+}
+
+type agMetric struct {
+	metric string
+	ts     opentsdb.TagSet
+	values []float64
+}
+
+func AggregateMeta(metric string, unit metadata.Unit, desc string) {
+	agStrings := []string{"avg", "count", "min", "median", "max", "95", "99"}
+	for _, ag := range agStrings {
+		if ag == "count" {
+			metadata.AddMetricMeta(metric+"_"+ag, metadata.Gauge, metadata.Count, "The number of samples per aggregation.")
+			continue
+		}
+		metadata.AddMetricMeta(metric+"_"+ag, metadata.Gauge, unit, desc)
+	}
+}
+
+func (am *agMetric) Process(now int64) {
+	var avg float64
+	for _, v := range am.values {
+		avg += v
+	}
+	avg /= float64(len(am.values))
+	extRoot := metricRoot + am.metric
+	tchan <- &opentsdb.DataPoint{
+		Metric:    extRoot + "_avg",
+		Timestamp: now,
+		Value:     avg,
+		Tags:      am.ts,
+	}
+	tchan <- &opentsdb.DataPoint{
+		Metric:    extRoot + "_count",
+		Timestamp: now,
+		Value:     len(am.values),
+		Tags:      am.ts,
+	}
+	sort.Float64s(am.values)
+	percentile := func(p float64) float64 {
+		if p <= 0 {
+			return am.values[0]
+		}
+		if p >= 1 {
+			return am.values[len(am.values)-1]
+		}
+		i := p * float64(len(am.values)-1)
+		i = math.Ceil(i)
+		return am.values[int(i)]
+	}
+	tchan <- &opentsdb.DataPoint{
+		Metric:    extRoot + "_min",
+		Timestamp: now,
+		Value:     percentile(0),
+		Tags:      am.ts,
+	}
+	tchan <- &opentsdb.DataPoint{
+		Metric:    extRoot + "_median",
+		Timestamp: now,
+		Value:     percentile(.5),
+		Tags:      am.ts,
+	}
+	tchan <- &opentsdb.DataPoint{
+		Metric:    extRoot + "_max",
+		Timestamp: now,
+		Value:     percentile(1),
+		Tags:      am.ts,
+	}
+	tchan <- &opentsdb.DataPoint{
+		Metric:    extRoot + "_95",
+		Timestamp: now,
+		Value:     percentile(.95),
+		Tags:      am.ts,
+	}
+	tchan <- &opentsdb.DataPoint{
+		Metric:    extRoot + "_99",
+		Timestamp: now,
+		Value:     percentile(.99),
+		Tags:      am.ts,
+	}
+}
+
+func Sample(metric string, ts opentsdb.TagSet, v float64) error {
+	if err := check(metric, &ts); err != nil {
+		return err
+	}
+	tss := metric + ts.String()
+	mlock.Lock()
+	if aggs[tss] == nil {
+		aggs[tss] = &agMetric{
+			metric: metric,
+			ts:     ts.Copy(),
+		}
+	}
+	aggs[tss].values = append(aggs[tss].values, v)
+	mlock.Unlock()
 	return nil
 }
 
@@ -318,7 +419,11 @@ func collect() {
 			}
 			tchan <- dp
 		}
+		for _, am := range aggs {
+			am.Process(now)
+		}
 		puts = make(map[string]*putMetric)
+		aggs = make(map[string]*agMetric)
 		mlock.Unlock()
 		time.Sleep(Freq)
 	}

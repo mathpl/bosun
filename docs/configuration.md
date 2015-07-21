@@ -43,7 +43,7 @@ Every variable is optional, though you should enable at least 1 backend.
   * Tag value glob matching, for example `avg:metric.name{tag=something-*}`. However single asterists like `tag=*` will stil work.
   * The items page.
   * The graph page's tag list.
-* graphiteHost: Graphite host. Same format as tsdbHost.
+* graphiteHost: an ip, hostname, ip:port, hostname:port or a URL, defaults to standard http/https ports, defaults to "/render" path.  Any non-zero path (even "/" overrides path)
 * logstashElasticHost: Elasticsearch host populated by logstash. Same format as tsdbHost.
 
 #### settings
@@ -144,6 +144,7 @@ Global template functions:
 
 * V: performs variable expansion on the argument and returns it. Needed since normal variable expansion is not done due to the `$` character being used by the Go template syntax.
 * bytes: converts the string input into a human-readable number of bytes with extension KB, MB, GB, etc.
+* pct: formats the float argument as a percentage. For example: `{{5.1 | pct}}` -> `5.10%`.
 * replace: [strings.Replace](http://golang.org/pkg/strings/#Replace)
 * short: Trims the string to everything before the first period. Useful for turning a FQDN into a shortname. For example: `{{short "foo.baz.com"}}` -> `foo`.
 
@@ -248,7 +249,7 @@ alert a {
 
 ### notification
 
-A notification is a chained action to perform. The chaining continues until the chain ends or the alert is acknowledged. At least one action must be specified. `next` and `timeout` are optional. Notifications are independent of each other and executed in concurrently (if there are many notifications for an alert, one will not block another).
+A notification is a chained action to perform. The chaining continues until the chain ends or the alert is acknowledged. At least one action must be specified. `next` and `timeout` are optional. Notifications are independent of each other and executed concurrently (if there are many notifications for an alert, one will not block another).
 
 * body: overrides the default POST body. The alert subject is passed as the templates `.` variable. The `V` function is available as in other templates. Additionally, a `json` function will output JSON-encoded data.
 * next: name of next notification to execute after timeout. Can be itself.

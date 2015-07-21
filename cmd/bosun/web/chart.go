@@ -65,6 +65,13 @@ func Graph(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interf
 	if s, ok := oreq.End.(string); ok && strings.Contains(s, "-ago") {
 		end = strings.TrimSuffix(s, "-ago")
 	}
+	if start == "" && end == "" {
+		s, sok := oreq.Start.(int64)
+		e, eok := oreq.End.(int64)
+		if sok && eok {
+			start = fmt.Sprintf("%vs", e-s)
+		}
+	}
 	m_units := make(map[string]string)
 	for i, q := range oreq.Queries {
 		if ar[i] {
@@ -197,7 +204,7 @@ func ExprGraph(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (in
 	e, err := expr.New(q, schedule.Conf.Funcs())
 	if err != nil {
 		return nil, err
-	} else if e.Root.Return() != parse.TypeSeries {
+	} else if e.Root.Return() != parse.TypeSeriesSet {
 		return nil, fmt.Errorf("egraph: requires an expression that returns a series")
 	}
 	// it may not strictly be necessary to recreate the contexts each time, but we do to be safe

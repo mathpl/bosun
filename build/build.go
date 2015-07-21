@@ -8,12 +8,21 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
+var (
+	shaFlag         = flag.String("sha", "", "SHA to embed.")
+	buildBosun      = flag.Bool("bosun", false, "Only build Bosun.")
+	buildScollector = flag.Bool("scollector", false, "Only build scollector.")
+	output          = flag.String("output", "", "Output directory; defaults to $GOPATH/bin.")
+
+	allProgs = []string{"bosun", "scollector"}
+)
+
 func main() {
-	shaFlag := flag.String("sha", "", "Sha to embed")
 	flag.Parse()
 	// Get current commit SHA
 	sha := *shaFlag
@@ -28,11 +37,25 @@ func main() {
 	}
 
 	timeStr := time.Now().UTC().Format("20060102150405")
-
 	ldFlags := fmt.Sprintf("-X bosun.org/version.VersionSHA %s -X bosun.org/version.VersionDate %s", sha, timeStr)
 
-	for _, app := range []string{"bosun", "scollector"} {
-		cmd := exec.Command("go", "install", "-v", "-ldflags", ldFlags, fmt.Sprintf("bosun.org/cmd/%s", app))
+	progs := allProgs
+	if *buildBosun {
+		progs = []string{"bosun"}
+	}
+	if *buildScollector {
+		progs = []string{"scollector"}
+	}
+	for _, app := range progs {
+		fmt.Println("building", app)
+		var args []string
+		if *output != "" {
+			args = append(args, "build", "-o", filepath.Join(*output, app))
+		} else {
+			args = append(args, "install")
+		}
+		args = append(args, "-ldflags", ldFlags, fmt.Sprintf("bosun.org/cmd/%s", app))
+		cmd := exec.Command("go", args...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		err := cmd.Run()

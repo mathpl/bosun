@@ -11,7 +11,7 @@ import (
 // build.go will set date and sha, but `go get` will set none of these.
 var (
 	// Version number for official releases Updated manually before each release.
-	Version = "0.2.0"
+	Version = "0.3.0"
 
 	// Set to any non-empty value by official release script
 	OfficialBuild string
@@ -23,13 +23,16 @@ var (
 
 // Get a string representing the version information for the current binary.
 func GetVersionInfo(app string) string {
+	var sha, build string
+	version := Version
 	if OfficialBuild == "" {
-		Version = Version + "-dev"
+		version += "-dev"
 	}
-	timeString := ""
-	buildTime, err := time.Parse("20060102150405", VersionDate)
-	if err == nil {
-		timeString = " Built " + buildTime.Format(time.RFC822)
+	if buildTime, err := time.Parse("20060102150405", VersionDate); err == nil {
+		build = " built " + buildTime.Format(time.RFC3339)
 	}
-	return fmt.Sprintf("%s version %v (%v)%s\n", app, Version, VersionSHA, timeString)
+	if VersionSHA != "" {
+		sha = fmt.Sprintf(" (%s)", VersionSHA)
+	}
+	return fmt.Sprintf("%s version %s%s%s", app, version, sha, build)
 }

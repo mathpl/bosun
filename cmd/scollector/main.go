@@ -17,6 +17,7 @@ import (
 
 	"bosun.org/_third_party/github.com/BurntSushi/toml"
 	"bosun.org/cmd/scollector/collectors"
+	"bosun.org/cmd/scollector/conf"
 	"bosun.org/collect"
 	"bosun.org/metadata"
 	"bosun.org/opentsdb"
@@ -30,7 +31,7 @@ var (
 	flagFilter          = flag.String("f", "", "Filters collectors matching these terms, separated by comma. Overrides Filter in conf file.")
 	flagList            = flag.Bool("l", false, "List available collectors.")
 	flagPrint           = flag.Bool("p", false, "Print to screen instead of sending to a host")
-	flagBatchSize       = flag.Int("b", 0, "OpenTSDB batch size. Used for debugging bad data.")
+	flagBatchSize       = flag.Int("b", 0, "OpenTSDB batch size. Default is 500.")
 	flagFake            = flag.Int("fake", 0, "Generates X fake data points on the test.fake metric per second.")
 	flagDebug           = flag.Bool("d", false, "Enables debug output.")
 	flagDisableMetadata = flag.Bool("m", false, "Disable sending of metadata.")
@@ -40,113 +41,6 @@ var (
 
 	mains []func()
 )
-
-type Conf struct {
-	// Host is the OpenTSDB or Bosun host to send data.
-	Host string
-	// FullHost enables full hostnames: doesn't truncate to first ".".
-	FullHost bool
-	// ColDir is the external collectors directory.
-	ColDir string
-	// Tags are added to every datapoint. If a collector specifies the same tag
-	// key, this one will be overwritten. The host tag is not supported.
-	Tags opentsdb.TagSet
-	// Hostname overrides the system hostname.
-	Hostname string
-	// DisableSelf disables sending of scollector self metrics.
-	DisableSelf bool
-	// Freq is the default frequency in seconds for most collectors.
-	Freq int
-	// Filter filters collectors matching these terms.
-	Filter []string
-	//Override default network interface expression
-	IfaceExpr string
-
-	// KeepalivedCommunity, if not empty, enables the Keepalived collector with
-	// the specified community.
-	KeepalivedCommunity string
-	HAProxy             []HAProxy
-	SNMP                []SNMP
-	ICMP                []ICMP
-	Vsphere             []Vsphere
-	AWS                 []AWS
-	Process             []collectors.ProcessParams
-	ProcessDotNet       []ProcessDotNet
-	HTTPUnit            []HTTPUnit
-}
-
-type HAProxy struct {
-	User      string
-	Password  string
-	Instances []HAProxyInstance
-}
-
-type HAProxyInstance struct {
-	Tier string
-	URL  string
-}
-
-type ICMP struct {
-	Host string
-}
-
-type Vsphere struct {
-	Host     string
-	User     string
-	Password string
-}
-
-type AWS struct {
-	AccessKey string
-	SecretKey string
-	Region    string
-}
-
-type SNMP struct {
-	Community string
-	Host      string
-}
-
-type ProcessDotNet struct {
-	Name string
-}
-
-type HTTPUnit struct {
-	TOML  string
-	Hiera string
-}
-
-func readConf() *Conf {
-	conf := &Conf{
-		Freq: 15,
-	}
-	loc := *flagConf
-	if *flagConf == "" {
-		p, err := exePath()
-		if err != nil {
-			slog.Error(err)
-			return conf
-		}
-		dir := filepath.Dir(p)
-		loc = filepath.Join(dir, "scollector.toml")
-	}
-	f, err := os.Open(loc)
-	if err != nil {
-		if *flagConf != "" {
-			slog.Fatal(err)
-		}
-		if *flagDebug {
-			slog.Error(err)
-		}
-	} else {
-		defer f.Close()
-		_, err := toml.DecodeReader(f, conf)
-		if err != nil {
-			slog.Fatal(err)
-		}
-	}
-	return conf
-}
 
 func main() {
 	flag.Parse()
@@ -200,8 +94,8 @@ func main() {
 			collectors.HAProxy(h.User, h.Password, i.Tier, i.URL)
 		}
 	}
-	for _, s := range conf.SNMP {
-		check(collectors.SNMP(s.Community, s.Host))
+	for _, cfg := range conf.SNMP {
+		check(collectors.SNMP(cfg, conf.MIBS))
 	}
 	for _, i := range conf.ICMP {
 		check(collectors.ICMP(i.Host))
@@ -214,6 +108,9 @@ func main() {
 	}
 	for _, p := range conf.Process {
 		check(collectors.AddProcessConfig(p))
+	}
+	for _, p := range conf.ProcessDotNet {
+		check(collectors.AddProcessDotNetConfig(p))
 	}
 	for _, h := range conf.HTTPUnit {
 		if h.TOML != "" {
@@ -258,6 +155,12 @@ func main() {
 	}
 	collectors.DefaultFreq = freq
 	collect.Freq = freq
+	if conf.BatchSize < 0 {
+		slog.Fatal("BatchSize must be > 0")
+	}
+	if conf.BatchSize != 0 {
+		collect.BatchSize = conf.BatchSize
+	}
 	collect.Tags = opentsdb.TagSet{"os": runtime.GOOS}
 	if *flagPrint {
 		collect.Print = true
@@ -304,6 +207,41 @@ func main() {
 		}
 	}()
 	select {}
+}
+
+func readConf() *conf.Conf {
+	conf := &conf.Conf{
+		Freq: 15,
+	}
+	loc := *flagConf
+	if *flagConf == "" {
+		p, err := exePath()
+		if err != nil {
+			slog.Error(err)
+			return conf
+		}
+		dir := filepath.Dir(p)
+		loc = filepath.Join(dir, "scollector.toml")
+	}
+	f, err := os.Open(loc)
+	if err != nil {
+		if *flagConf != "" {
+			slog.Fatal(err)
+		}
+		if *flagDebug {
+			slog.Error(err)
+		}
+	} else {
+		defer f.Close()
+		md, err := toml.DecodeReader(f, conf)
+		if err != nil {
+			slog.Fatal(err)
+		}
+		if u := md.Undecoded(); len(u) > 0 {
+			slog.Fatalf("extra keys in %s: %v", loc, u)
+		}
+	}
+	return conf
 }
 
 func exePath() (string, error) {
@@ -366,13 +304,13 @@ func printPut(c chan *opentsdb.DataPoint) {
 }
 
 func toToml(fname string) {
-	var c Conf
+	var c conf.Conf
 	b, err := ioutil.ReadFile(*flagConf)
 	if err != nil {
 		slog.Fatal(err)
 	}
 	extra := new(bytes.Buffer)
-	var hap HAProxy
+	var hap conf.HAProxy
 	for i, line := range strings.Split(string(b), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -398,14 +336,15 @@ func toToml(fname string) {
 				if len(sp) != 2 {
 					slog.Fatal("invalid snmp string:", v)
 				}
-				c.SNMP = append(c.SNMP, SNMP{
+				c.SNMP = append(c.SNMP, conf.SNMP{
 					Community: sp[0],
 					Host:      sp[1],
 				})
 			}
 		case "icmp":
-			c.ICMP = append(c.ICMP, ICMP{v})
-
+			for _, i := range strings.Split(v, ",") {
+				c.ICMP = append(c.ICMP, conf.ICMP{Host: i})
+			}
 		case "haproxy":
 			if v != "" {
 				for _, s := range strings.Split(v, ",") {
@@ -425,7 +364,7 @@ func toToml(fname string) {
 			if len(sp) != 2 {
 				slog.Fatal("invalid haproxy_instance string:", v)
 			}
-			hap.Instances = append(hap.Instances, HAProxyInstance{
+			hap.Instances = append(hap.Instances, conf.HAProxyInstance{
 				Tier: sp[0],
 				URL:  sp[1],
 			})
@@ -451,7 +390,7 @@ func toToml(fname string) {
 				if len(accessKey) == 0 || len(secretKey) == 0 || len(region) == 0 {
 					slog.Fatal("invalid AWS string:", v)
 				}
-				c.AWS = append(c.AWS, AWS{
+				c.AWS = append(c.AWS, conf.AWS{
 					AccessKey: accessKey,
 					SecretKey: secretKey,
 					Region:    region,
@@ -473,7 +412,7 @@ func toToml(fname string) {
 				if len(user) == 0 || len(pwd) == 0 || len(host) == 0 {
 					slog.Fatal("invalid vsphere string:", v)
 				}
-				c.Vsphere = append(c.Vsphere, Vsphere{
+				c.Vsphere = append(c.Vsphere, conf.Vsphere{
 					User:     user,
 					Password: pwd,
 					Host:     host,
@@ -514,7 +453,7 @@ func toToml(fname string) {
 `, v))
 			}
 		case "process_dotnet":
-			c.ProcessDotNet = append(c.ProcessDotNet, ProcessDotNet{v})
+			c.ProcessDotNet = append(c.ProcessDotNet, conf.ProcessDotNet{Name: v})
 		case "keepalived_community":
 			c.KeepalivedCommunity = v
 		default:

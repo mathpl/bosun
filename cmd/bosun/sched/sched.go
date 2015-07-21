@@ -29,7 +29,10 @@ func init() {
 }
 
 type Schedule struct {
-	sync.Mutex
+	mutex         sync.Mutex
+	mutexHolder   string
+	mutexAquired  time.Time
+	mutexWaitTime int64
 
 	Conf          *conf.Conf
 	status        States
@@ -49,10 +52,31 @@ type Schedule struct {
 	db            *bolt.DB
 }
 
-func (s *Schedule) TimeLock(t miniprofiler.Timer) {
-	t.Step("lock", func(t miniprofiler.Timer) {
-		s.Lock()
-	})
+func init() {
+	metadata.AddMetricMeta(
+		"bosun.schedule.lock_time", metadata.Counter, metadata.MilliSecond,
+		"Length of time spent waiting for or holding the schedule lock.")
+	metadata.AddMetricMeta(
+		"bosun.schedule.lock_count", metadata.Counter, metadata.Count,
+		"Number of times the given caller acquired the lock.")
+}
+
+func (s *Schedule) Lock(method string) {
+	start := time.Now()
+	s.mutex.Lock()
+	s.mutexAquired = time.Now()
+	s.mutexHolder = method
+	s.mutexWaitTime = int64(s.mutexAquired.Sub(start) / time.Millisecond) // remember this so we don't have to call put until we leave the critical section.
+}
+
+func (s *Schedule) Unlock() {
+	holder := s.mutexHolder
+	start := s.mutexAquired
+	waitTime := s.mutexWaitTime
+	s.mutex.Unlock()
+	collect.Add("schedule.lock_time", opentsdb.TagSet{"caller": holder, "op": "wait"}, waitTime)
+	collect.Add("schedule.lock_time", opentsdb.TagSet{"caller": holder, "op": "hold"}, int64(time.Since(start)/time.Millisecond))
+	collect.Add("schedule.lock_count", opentsdb.TagSet{"caller": holder}, 1)
 }
 
 type Metavalue struct {
@@ -145,19 +169,22 @@ func (s *Schedule) GetMetadata(metric string, subset opentsdb.TagSet) []metadata
 type States map[expr.AlertKey]*State
 
 type StateTuple struct {
-	NeedAck bool
-	Active  bool
-	Status  Status
+	NeedAck  bool
+	Active   bool
+	Status   Status
+	Silenced bool
 }
 
-// GroupStates groups by NeedAck, Active, and Status.
-func (states States) GroupStates() map[StateTuple]States {
+// GroupStates groups by NeedAck, Active, Status, and Silenced.
+func (states States) GroupStates(silenced map[expr.AlertKey]Silence) map[StateTuple]States {
 	r := make(map[StateTuple]States)
 	for ak, st := range states {
+		_, sil := silenced[ak]
 		t := StateTuple{
 			st.NeedAck,
 			st.IsActive(),
 			st.AbnormalStatus(),
+			sil,
 		}
 		if _, present := r[t]; !present {
 			r[t] = make(States)
@@ -239,11 +266,12 @@ func (states States) GroupSets() map[string]expr.AlertKeys {
 type StateGroup struct {
 	Active   bool `json:",omitempty"`
 	Status   Status
+	Silenced bool
 	Subject  string        `json:",omitempty"`
-	Len      int           `json:",omitempty"`
 	Alert    string        `json:",omitempty"`
 	AlertKey expr.AlertKey `json:",omitempty"`
 	Ago      string        `json:",omitempty"`
+	State    *State        `json:",omitempty"`
 	Children []*StateGroup `json:",omitempty"`
 }
 
@@ -253,15 +281,19 @@ type StateGroups struct {
 		Acknowledged []*StateGroup `json:",omitempty"`
 	}
 	TimeAndDate []int
-	Silenced    map[expr.AlertKey]Silence
 }
 
 func (s *Schedule) MarshalGroups(T miniprofiler.Timer, filter string) (*StateGroups, error) {
+	var silenced map[expr.AlertKey]Silence
+	T.Step("Silenced", func(miniprofiler.Timer) {
+		silenced = s.Silenced()
+	})
 	t := StateGroups{
 		TimeAndDate: s.Conf.TimeAndDate,
-		Silenced:    s.Silenced(),
 	}
-	s.TimeLock(T)
+	T.Step("lock", func(t miniprofiler.Timer) {
+		s.Lock("MarshalGroups")
+	})
 	defer s.Unlock()
 	status := make(States)
 	matches, err := makeFilter(filter)
@@ -282,7 +314,7 @@ func (s *Schedule) MarshalGroups(T miniprofiler.Timer, filter string) (*StateGro
 	}
 	var groups map[StateTuple]States
 	T.Step("GroupStates", func(T miniprofiler.Timer) {
-		groups = status.GroupStates()
+		groups = status.GroupStates(silenced)
 	})
 	T.Step("groups", func(T miniprofiler.Timer) {
 		for tuple, states := range groups {
@@ -295,21 +327,26 @@ func (s *Schedule) MarshalGroups(T miniprofiler.Timer, filter string) (*StateGro
 				})
 				for name, group := range sets {
 					g := StateGroup{
-						Active:  tuple.Active,
-						Status:  tuple.Status,
-						Subject: fmt.Sprintf("%s - %s", tuple.Status, name),
-						Len:     len(group),
+						Active:   tuple.Active,
+						Status:   tuple.Status,
+						Silenced: tuple.Silenced,
+						Subject:  fmt.Sprintf("%s - %s", tuple.Status, name),
 					}
 					for _, ak := range group {
 						st := s.status[ak]
 						g.Children = append(g.Children, &StateGroup{
 							Active:   tuple.Active,
 							Status:   tuple.Status,
+							Silenced: tuple.Silenced,
 							AlertKey: ak,
 							Alert:    ak.Name(),
 							Subject:  string(st.Subject),
 							Ago:      marshalTime(st.Last().Time),
+							State:    st,
 						})
+					}
+					if len(g.Children) == 1 && g.Children[0].Subject != "" {
+						g.Subject = g.Children[0].Subject
 					}
 					grouped = append(grouped, &g)
 				}
@@ -547,7 +584,7 @@ func (s *State) Action(user, message string, t ActionType, timestamp time.Time) 
 }
 
 func (s *Schedule) Action(user, message string, t ActionType, ak expr.AlertKey) error {
-	s.Lock()
+	s.Lock("Action")
 	defer func() {
 		s.Unlock()
 		s.Save()
