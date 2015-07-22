@@ -47,6 +47,7 @@ func (pm *putMetric) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Encoding") == "gzip" {
 		if bodyReader, err = gzip.NewReader(r.Body); err != nil {
 			w.WriteHeader(500)
+			w.Write([]byte(fmt.Sprintf("Unable to decompress: %s\n", err)))
 			return
 		}
 	} else {
@@ -68,7 +69,9 @@ func (pm *putMetric) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if err = json.Unmarshal(body, &dp); err == nil {
 			mdp = opentsdb.MultiDataPoint{dp}
 		} else {
-			fmt.Printf("Unable to decode: %s\n", err)
+			w.WriteHeader(500)
+			w.Write([]byte(fmt.Sprintf("Unable to decode OpenTSDB json: %s\n", err)))
+			return
 		}
 
 		for _, dp := range mdp {
