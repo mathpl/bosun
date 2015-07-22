@@ -83,6 +83,9 @@ func main() {
 	if conf.ColDir != "" {
 		collectors.InitPrograms(conf.ColDir)
 	}
+	if conf.LocalListener != "" {
+		collectors.LocalListener(conf.LocalListener)
+	}
 	var err error
 	check := func(e error) {
 		if e != nil {

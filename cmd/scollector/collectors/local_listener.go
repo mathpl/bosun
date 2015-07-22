@@ -11,13 +11,17 @@ import (
 	"bosun.org/opentsdb"
 )
 
-func init() {
-	collectors = append(collectors, &StreamCollector{F: c_local_listener})
+func LocalListener(listenAddr string) error {
+	collectors = append(collectors, &StreamCollector{F: func() <-chan *opentsdb.MultiDataPoint {
+		return c_local_listener(listenAddr)
+	},
+		name: fmt.Sprintf("local_listener-%s", listenAddr),
+	})
+
+	return nil
 }
 
-func c_local_listener() <-chan *opentsdb.MultiDataPoint {
-	listenAddr := "localhost:4240"
-
+func c_local_listener(listenAddr string) <-chan *opentsdb.MultiDataPoint {
 	pm := &putMetric{}
 	pm.localMetrics = make(chan *opentsdb.MultiDataPoint, 1)
 
