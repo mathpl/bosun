@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"bosun.org/_third_party/github.com/aymerick/douceur/inliner"
-
+	"bosun.org/_third_party/github.com/jmoiron/jsonq"
 	"bosun.org/cmd/bosun/conf"
 	"bosun.org/cmd/bosun/expr"
 	"bosun.org/cmd/bosun/expr/parse"
@@ -279,7 +279,7 @@ func (c *Context) Eval(v interface{}) (interface{}, error) {
 		return nil, err
 	}
 	if len(res) == 0 {
-		return nil, fmt.Errorf("no results returned")
+		return math.NaN(), nil
 	}
 	// TODO: don't choose a random result, make sure there's exactly 1
 	return res[0].Value, nil
@@ -425,6 +425,27 @@ func (c *Context) HTTPGet(url string) string {
 		return err.Error()
 	}
 	return string(body)
+}
+
+func (c *Context) HTTPGetJSON(url string) (*jsonq.JsonQuery, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%v: returned %v", url, resp.Status)
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	data := make(map[string]interface{})
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		return nil, err
+	}
+	return jsonq.NewQuery(data), nil
 }
 
 func (c *Context) HTTPPost(url, bodyType, data string) string {

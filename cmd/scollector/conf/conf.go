@@ -41,6 +41,7 @@ type Conf struct {
 	Process       []ProcessParams
 	ProcessDotNet []ProcessDotNet
 	HTTPUnit      []HTTPUnit
+	LocalListener string
 }
 
 type HAProxy struct {

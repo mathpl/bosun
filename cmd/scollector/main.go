@@ -83,6 +83,9 @@ func main() {
 	if conf.ColDir != "" {
 		collectors.InitPrograms(conf.ColDir)
 	}
+	if conf.LocalListener != "" {
+		collectors.LocalListener(conf.LocalListener)
+	}
 	var err error
 	check := func(e error) {
 		if e != nil {
@@ -161,7 +164,13 @@ func main() {
 	if conf.BatchSize != 0 {
 		collect.BatchSize = conf.BatchSize
 	}
-	collect.Tags = opentsdb.TagSet{"os": runtime.GOOS}
+
+	if conf.Tags != nil {
+		collect.Tags = conf.Tags
+	} else {
+		collect.Tags = make(opentsdb.TagSet)
+	}
+	collect.Tags["os"] = runtime.GOOS
 	if *flagPrint {
 		collect.Print = true
 	}
