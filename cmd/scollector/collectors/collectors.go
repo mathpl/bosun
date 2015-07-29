@@ -132,9 +132,10 @@ func Search(s []string) []Collector {
 
 // Search returns all collectors matching the pattern s.
 func AddTagOverrides(s []Collector, tagOverride []conf.TagOverride) {
-	for _, c := range s {
-		for _, to := range tagOverride {
-			if strings.Contains(c.Name(), to.Collector) {
+	for _, to := range tagOverride {
+		re := regexp.MustCompile(to.CollectorRE)
+		for _, c := range s {
+			if re.MatchString(c.Name()) {
 				c.AddTags(to.Tags)
 				break
 			}
