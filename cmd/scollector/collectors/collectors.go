@@ -126,6 +126,7 @@ func Search(s []string) []Collector {
 		for _, p := range s {
 			if strings.Contains(c.Name(), p) {
 				r = append(r, c)
+				break
 			}
 		}
 	}
@@ -139,7 +140,6 @@ func AddTagOverrides(s []Collector, tagOverride []conf.TagOverride) {
 		for _, c := range s {
 			if re.MatchString(c.Name()) {
 				c.AddTags(to.Tags)
-				break
 			}
 		}
 	}
