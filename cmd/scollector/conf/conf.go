@@ -43,6 +43,8 @@ type Conf struct {
 	ProcessDotNet []ProcessDotNet
 	HTTPUnit      []HTTPUnit
 	Riak          []Riak
+
+	TagOverride []TagOverride
 }
 
 type HAProxy struct {
@@ -116,4 +118,9 @@ type HTTPUnit struct {
 
 type Riak struct {
 	URL string
+}
+
+type TagOverride struct {
+	Collector string
+	Tags      map[string]string
 }

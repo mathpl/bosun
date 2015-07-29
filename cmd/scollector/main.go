@@ -152,6 +152,7 @@ func main() {
 	for _, col := range c {
 		col.Init()
 	}
+	collectors.AddTagOverrides(c, conf.TagOverride)
 	u, err := parseHost(conf.Host)
 	if *flagList {
 		list(c)

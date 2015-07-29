@@ -22,6 +22,8 @@ import (
 type ProgramCollector struct {
 	Path     string
 	Interval time.Duration
+
+	TagOverride
 }
 
 func InitPrograms(cpath string) {
