@@ -125,6 +125,6 @@ type Riak struct {
 }
 
 type TagOverride struct {
-	Collector string
-	Tags      map[string]string
+	CollectorRE string
+	Tags        map[string]string
 }
