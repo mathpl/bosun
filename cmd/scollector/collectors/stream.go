@@ -20,6 +20,8 @@ type StreamCollector struct {
 	// internal use
 	sync.Mutex
 	enabled bool
+
+	TagOverride
 }
 
 func (s *StreamCollector) Init() {
