@@ -1,6 +1,10 @@
 package collectors
 
-import "bosun.org/opentsdb"
+import (
+	"log"
+
+	"bosun.org/opentsdb"
+)
 
 type TagOverride struct {
 	tags opentsdb.TagSet
@@ -10,7 +14,7 @@ func (to *TagOverride) AddTags(t opentsdb.TagSet) {
 	if to.tags == nil {
 		to.tags = t
 	} else {
-		to.tags.Merge(t)
+		log.Printf("Adding %+v", t)
 	}
 }
 
