@@ -6,6 +6,16 @@ type TagOverride struct {
 	tags opentsdb.TagSet
 }
 
-func (c *TagOverride) AddTags(t opentsdb.TagSet) {
-	c.tags = t
+func (to *TagOverride) AddTags(t opentsdb.TagSet) {
+	if to.tags == nil {
+		to.tags = t
+	} else {
+		to.tags.Merge(t)
+	}
+}
+
+func (to *TagOverride) ApplyTags(t opentsdb.TagSet) {
+	if to.tags != nil {
+		t.Merge(to.tags)
+	}
 }
