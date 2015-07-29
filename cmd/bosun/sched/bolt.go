@@ -20,18 +20,11 @@ import (
 	"bosun.org/opentsdb"
 )
 
-var savePending bool
-
-func (s *Schedule) Save() {
-	go func() {
-		s.Lock("Save")
-		defer s.Unlock()
-		if savePending {
-			return
-		}
-		savePending = true
-		time.AfterFunc(time.Second*5, s.save)
-	}()
+func (s *Schedule) performSave() {
+	for {
+		time.Sleep(60 * time.Second) // wait 60 seconds to throttle.
+		s.save()
+	}
 }
 
 type counterWriter struct {
@@ -60,12 +53,10 @@ const (
 )
 
 func (s *Schedule) save() {
-	defer func() {
-		savePending = false
-	}()
 	if s.db == nil {
 		return
 	}
+	s.Lock("Save")
 	store := map[string]interface{}{
 		dbMetric:        s.Search.Read.Metric,
 		dbTagk:          s.Search.Read.Tagk,
@@ -85,6 +76,7 @@ func (s *Schedule) save() {
 		enc := gob.NewEncoder(cw)
 		if err := enc.Encode(data); err != nil {
 			log.Printf("error saving %s: %v", name, err)
+			s.Unlock()
 			return
 		}
 		if err := gz.Flush(); err != nil {
@@ -97,6 +89,7 @@ func (s *Schedule) save() {
 		log.Printf("wrote %s: %v", name, conf.ByteSize(cw.written))
 		collect.Put("statefile.size", opentsdb.TagSet{"object": name}, cw.written)
 	}
+	s.Unlock()
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(dbBucket))
 		if err != nil {

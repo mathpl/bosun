@@ -99,8 +99,7 @@ func (c *Context) GraphLink(v string) string {
 
 func (c *Context) Rule() (string, error) {
 	p := url.Values{}
-	//There might be something better when we tie the notifications to evaluation time issue #395
-	time := time.Now().UTC()
+	time := c.runHistory.Start
 	p.Add("alert", c.Alert.Name)
 	p.Add("fromDate", time.Format("2006-01-02"))
 	p.Add("fromTime", time.Format("15:04"))
@@ -299,7 +298,7 @@ func (c *Context) graph(v interface{}, unit string, filter bool) (interface{}, e
 	var buf bytes.Buffer
 	const width = 800
 	const height = 600
-	footerHTML := fmt.Sprintf(`<small>Query: %s<br>Time: %s</small>`,
+	footerHTML := fmt.Sprintf(`<p><small>Query: %s<br>Time: %s</small></p>`,
 		template.HTMLEscapeString(exprText),
 		c.runHistory.Start.Format(time.RFC3339))
 	if c.IsEmail {
@@ -428,7 +427,13 @@ func (c *Context) HTTPGet(url string) string {
 }
 
 func (c *Context) HTTPGetJSON(url string) (*jsonq.JsonQuery, error) {
-	resp, err := http.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +478,7 @@ func (c *Context) LSQuery(index_root, filter, sduration, eduration string, size 
 }
 
 func (c *Context) LSQueryAll(index_root, keystring, filter, sduration, eduration string, size int) (interface{}, error) {
-	req, err := expr.LSBaseQuery(time.Now(), index_root, c.runHistory.Logstash, keystring, filter, sduration, eduration, size)
+	req, err := expr.LSBaseQuery(c.runHistory.Start, index_root, c.runHistory.Logstash, keystring, filter, sduration, eduration, size)
 	if err != nil {
 		return nil, err
 	}

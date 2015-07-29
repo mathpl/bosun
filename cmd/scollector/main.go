@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -71,6 +73,12 @@ func main() {
 	} else if conf.Tags["host"] != "" {
 		slog.Fatalf("host not supported in custom tags, use Hostname instead")
 	}
+	if conf.PProf != "" {
+		go func() {
+			slog.Infof("Starting pprof at http://%s/debug/pprof/", conf.PProf)
+			slog.Fatal(http.ListenAndServe(conf.PProf, nil))
+		}()
+	}
 	collectors.AddTags = conf.Tags
 	util.FullHostname = conf.FullHost
 	util.Set()
@@ -124,6 +132,9 @@ func main() {
 		}
 	}
 	check(collectors.AddIfstatConfig(conf.IfaceExpr))
+	for _, r := range conf.Riak {
+		check(collectors.Riak(r.URL))
+	}
 	if err != nil {
 		slog.Fatal(err)
 	}
@@ -145,6 +156,7 @@ func main() {
 	for _, col := range c {
 		col.Init()
 	}
+	collectors.AddTagOverrides(c, conf.TagOverride)
 	u, err := parseHost(conf.Host)
 	if *flagList {
 		list(c)

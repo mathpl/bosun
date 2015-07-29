@@ -370,9 +370,7 @@ Returns the Unix epoch in seconds of the expression start time (scalar).
 
 ## filter(seriesSet, numberSet) seriesSet
 
-Returns all results in series that are a subset of anything in number, or
-that have number as a subset. Useful with the limit and sort functions to
-return the top X results of a query.
+Returns all results in seriesSet that are a subset of numberSet and have a non-zero value. Useful with the limit and sort functions to return the top X results of a query.
 
 ## limit(numberSet, count scalar) numberSet
 
@@ -385,6 +383,10 @@ Returns the first key from the given lookup table with matching tags.
 ## nv(numberSet, scalar) numberSet
 
 Change the NaN value during binary operations (when joining two queries) of unknown groups to the scalar. This is useful to prevent unknown group and other errors from bubbling up.
+
+## rename(seriesSet, string) seriesSet
+
+Accepts a series and a set of tags to rename in `Key1=NewK1,Key2=NewK2` format. All data points will have the tag keys renamed according to the spec provided, in order. This can be useful for combining results from seperate queries that have similar tagsets with different tag keys.
 
 ## sort(numberSet, (asc|desc) string) numberSet
 

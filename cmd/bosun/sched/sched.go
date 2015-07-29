@@ -87,7 +87,6 @@ type Metavalue struct {
 func (s *Schedule) PutMetadata(k metadata.Metakey, v interface{}) {
 	s.metalock.Lock()
 	s.Metadata[k] = &Metavalue{time.Now().UTC(), v}
-	s.Save()
 	s.metalock.Unlock()
 }
 
@@ -437,9 +436,11 @@ func Close() {
 
 func (s *Schedule) Close() {
 	s.save()
+	s.Lock("Close")
 	if s.db != nil {
 		s.db.Close()
 	}
+	s.Unlock()
 }
 
 func (s *Schedule) Run() error {
@@ -451,6 +452,7 @@ func (s *Schedule) Run() error {
 		go s.PingHosts()
 	}
 	go s.Poll()
+	go s.performSave()
 	interval := uint64(0)
 	for {
 		wait := time.After(s.Conf.CheckFrequency)
@@ -585,10 +587,7 @@ func (s *State) Action(user, message string, t ActionType, timestamp time.Time) 
 
 func (s *Schedule) Action(user, message string, t ActionType, ak expr.AlertKey) error {
 	s.Lock("Action")
-	defer func() {
-		s.Unlock()
-		s.Save()
-	}()
+	defer s.Unlock()
 	st := s.status[ak]
 	if st == nil {
 		return fmt.Errorf("no such alert key: %v", ak)

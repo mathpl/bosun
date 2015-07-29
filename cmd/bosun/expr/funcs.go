@@ -360,7 +360,9 @@ func Filter(e *State, T miniprofiler.Timer, series *Results, number *Results) (*
 	for _, sr := range series.Results {
 		for _, nr := range number.Results {
 			if sr.Group.Subset(nr.Group) || nr.Group.Subset(sr.Group) {
-				ns = append(ns, sr)
+				if nr.Value.Value().(Number) != 0 {
+					ns = append(ns, sr)
+				}
 			}
 		}
 	}
@@ -843,8 +845,12 @@ func timeGraphiteRequest(e *State, T miniprofiler.Timer, req *graphite.Request) 
 func timeTSDBRequest(e *State, T miniprofiler.Timer, req *opentsdb.Request) (s opentsdb.ResponseSet, err error) {
 	e.tsdbQueries = append(e.tsdbQueries, *req)
 	if e.autods > 0 {
-		if err := req.AutoDownsample(e.autods); err != nil {
-			return nil, err
+		for _, q := range req.Queries {
+			if q.Downsample == "" {
+				if err := req.AutoDownsample(e.autods); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	b, _ := json.MarshalIndent(req, "", "  ")

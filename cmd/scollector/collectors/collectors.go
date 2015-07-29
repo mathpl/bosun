@@ -22,6 +22,7 @@ type Collector interface {
 	Run(chan<- *opentsdb.DataPoint)
 	Name() string
 	Init()
+	AddTags(opentsdb.TagSet)
 }
 
 const (
@@ -128,6 +129,18 @@ func Search(s []string) []Collector {
 		}
 	}
 	return r
+}
+
+// Search returns all collectors matching the pattern s.
+func AddTagOverrides(s []Collector, tagOverride []conf.TagOverride) {
+	for _, c := range s {
+		for _, to := range tagOverride {
+			if strings.Contains(c.Name(), to.Collector) {
+				c.AddTags(to.Tags)
+				break
+			}
+		}
+	}
 }
 
 // Run runs specified collectors. Use nil for all collectors.

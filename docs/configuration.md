@@ -148,6 +148,7 @@ Global template functions:
 * pct: formats the float argument as a percentage. For example: `{{5.1 | pct}}` -> `5.10%`.
 * replace: [strings.Replace](http://golang.org/pkg/strings/#Replace)
 * short: Trims the string to everything before the first period. Useful for turning a FQDN into a shortname. For example: `{{short "foo.baz.com"}}` -> `foo`.
+* parseDuration: [time.ParseDuration](http://golang.org/pkg/time/#ParseDuration). Useful when working with an alert's .Last.Time.Add method to generate urls to other systems.
 
 All body templates are associated, and so may be executed from another. Use the name of the other template section for inclusion. Subject templates are similarly associated.
 
@@ -256,6 +257,7 @@ A notification is a chained action to perform. The chaining continues until the 
 * next: name of next notification to execute after timeout. Can be itself.
 * timeout: duration to wait until next is executed. If not specified, will happen immediately.
 * contentType: If your body for a POST notification requires a different Content-Type header than the default of `application/x-www-form-urlencoded`, you may set the contentType variable. 
+* runOnActions: Exclude this notification from action notifications. Notifications will be sent on ack/close/forget actions using a built-in template to all root level notifications for an alert, *unless* the notification specifies `runOnActions = false`. 
 
 #### actions
 

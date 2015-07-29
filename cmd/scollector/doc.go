@@ -89,9 +89,12 @@ will be used to set configuration flags. The format is toml
 (https://github.com/toml-lang/toml/blob/master/versions/en/toml-v0.2.0.md).
 Available keys are:
 
-Host (string): the OpenTSDB or Bosun host to send data.
+Host (string): the OpenTSDB or Bosun host to send data, supports TLS and
+HTTP Basic Auth.
 
-FullHost (string): enables full hostnames: doesn't truncate to first ".".
+	Host = "https://user:password@example.com/"
+
+FullHost (boolean): enables full hostnames: doesn't truncate to first ".".
 
 ColDir (string): is the external collectors directory.
 
@@ -108,6 +111,9 @@ BatchSize (integer): is the number of metrics that will be sent in each batch.
 Default is 500.
 
 Filter (array of string): filters collectors matching these terms.
+
+PProf (string): optional IP:Port binding to be used for debugging with pprof.
+Examples: localhost:6060 for loopback or :6060 for all IP addresses.
 
 Collector configuration keys
 
@@ -199,6 +205,7 @@ AWS (array of table, keys are AccessKey, SecretKey, Region): AWS hosts to poll.
 	  SecretKey = "snch0d"
 	  Region = "somewhere"
 
+
 Process (array of table, keys are Command, Name, Args for Linux, and Name
 for Windows): processes to monitor. Name is optional, and defaults to Command.
 
@@ -234,6 +241,11 @@ or just one.
 	  Hiera = "/path/to/listeners.json"
 	[[HTTPUnit]]
 	  TOML = "/some/other.toml"
+
+Riak (array of table, keys are URL): Riak hosts to poll.
+
+	[[Riak]]
+	  URL = "http://localhost:8098/stats"
 
 Windows
 
