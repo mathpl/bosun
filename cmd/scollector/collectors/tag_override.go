@@ -8,14 +8,14 @@ type TagOverride struct {
 
 func (to *TagOverride) AddTags(t opentsdb.TagSet) {
 	if to.tags == nil {
-		to.tags = t
+		to.tags = t.Copy()
 	} else {
-		to.tags.Merge(t)
+		to.tags = to.tags.Merge(t)
 	}
 }
 
 func (to *TagOverride) ApplyTags(t opentsdb.TagSet) {
 	if to.tags != nil {
-		t.Merge(to.tags)
+		t = t.Merge(to.tags)
 	}
 }
