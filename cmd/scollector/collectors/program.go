@@ -149,6 +149,7 @@ func (c *ProgramCollector) runProgram(dpchan chan<- *opentsdb.DataPoint) (progEr
 				dp.Tags = opentsdb.TagSet{}
 			}
 			setExternalTags(dp.Tags)
+			c.ApplyTags(dp.Tags)
 			dpchan <- &dp
 			continue
 		} else {

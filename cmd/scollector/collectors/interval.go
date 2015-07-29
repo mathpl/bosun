@@ -71,9 +71,7 @@ func (c *IntervalCollector) Run(dpchan chan<- *opentsdb.DataPoint) {
 			}
 
 			for _, dp := range md {
-				if len(c.tags) > 0 {
-					dp.Tags.Merge(c.tags)
-				}
+				c.ApplyTags(dp.Tags)
 				dpchan <- dp
 			}
 		}

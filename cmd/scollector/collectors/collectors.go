@@ -24,6 +24,7 @@ type Collector interface {
 	Name() string
 	Init()
 	AddTags(opentsdb.TagSet)
+	ApplyTags(opentsdb.TagSet)
 }
 
 const (
