@@ -124,7 +124,6 @@ func Search(s []string) []Collector {
 		for _, p := range s {
 			if strings.Contains(c.Name(), p) {
 				r = append(r, c)
-				break
 			}
 		}
 	}
