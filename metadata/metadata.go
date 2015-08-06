@@ -234,6 +234,7 @@ func sendMetadata(ms []Metasend) {
 		currentmetahost = (currentmetahost + 1) % len(metahosts)
 		return
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		slog.Errorln("bad metadata return:", resp.Status)
 		return
