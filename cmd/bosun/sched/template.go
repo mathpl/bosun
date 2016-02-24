@@ -139,6 +139,19 @@ func (s *Schedule) ExecuteBody(rh *RunHistory, a *conf.Alert, st *models.Inciden
 	return buf.Bytes(), c.Attachments, nil
 }
 
+func (s *Schedule) ExecuteHttpBody(rh *RunHistory, a *conf.Alert, st *models.IncidentState) ([]byte, error) {
+	t := a.Template
+	if t == nil || t.HttpBody == nil {
+		return nil, nil
+	}
+	c := s.Data(rh, st, a, false)
+	buf := new(bytes.Buffer)
+	if err := t.HttpBody.Execute(buf, c); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (s *Schedule) ExecuteSubject(rh *RunHistory, a *conf.Alert, st *models.IncidentState, isEmail bool) ([]byte, error) {
 	t := a.Template
 	if t == nil || t.Subject == nil {

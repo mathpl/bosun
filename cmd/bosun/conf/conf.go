@@ -310,11 +310,12 @@ func (c *Conf) parseNotifications(v string) (map[string]*Notification, error) {
 type Template struct {
 	Text string
 	Vars
-	Name    string
-	Body    *htemplate.Template `json:"-"`
-	Subject *ttemplate.Template `json:"-"`
+	Name     string
+	Body     *htemplate.Template `json:"-"`
+	HttpBody *ttemplate.Template `json:"-"`
+	Subject  *ttemplate.Template `json:"-"`
 
-	body, subject string
+	body, subject, httpBody string
 }
 
 type Notification struct {
@@ -824,6 +825,14 @@ func (c *Conf) loadTemplate(s *parse.SectionNode) {
 					c.error(err)
 				}
 				t.Subject = tmpl
+			case "httpBody":
+				t.httpBody = v
+				tmpl := c.subjects.New(name).Funcs(funcs)
+				_, err := tmpl.Parse(t.httpBody)
+				if err != nil {
+					c.error(err)
+				}
+				t.HttpBody = tmpl
 			default:
 				if !strings.HasPrefix(k, "$") {
 					c.errorf("unknown key %s", k)

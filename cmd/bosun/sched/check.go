@@ -273,7 +273,7 @@ func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.E
 		}
 		endTiming()
 
-		//Render body
+		//render body
 		endTiming = collect.StartTimer(metric, opentsdb.TagSet{"alert": a.Name, "type": "body"})
 		body, _, err := s.ExecuteBody(r, a, state, false)
 		if err != nil {
@@ -294,6 +294,19 @@ func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.E
 			errs = append(errs, err)
 		} else if subject == nil {
 			err = fmt.Errorf("Empty email body on %s", state.AlertKey)
+			slog.Error(err)
+			errs = append(errs, err)
+		}
+		endTiming()
+
+		//Render httpbody
+		endTiming = collect.StartTimer(metric, opentsdb.TagSet{"alert": a.Name, "type": "httpbody"})
+		httpbody, err := s.ExecuteHttpBody(r, a, state)
+		if err != nil {
+			slog.Infof("%s: %v", state.AlertKey, err)
+			errs = append(errs, err)
+		} else if subject == nil {
+			err = fmt.Errorf("Empty httpbody on %s", state.AlertKey)
 			slog.Error(err)
 			errs = append(errs, err)
 		}
@@ -325,6 +338,7 @@ func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.E
 		}
 		state.Subject = string(subject)
 		state.Body = string(body)
+		state.HttpBody = string(httpbody)
 		//don't save email seperately if they are identical
 		if string(state.EmailBody) != state.Body {
 			state.EmailBody = emailbody
