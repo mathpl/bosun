@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -315,6 +316,16 @@ func (c *Context) Eval(v interface{}) (interface{}, error) {
 func (c *Context) EvalAll(v interface{}) (interface{}, error) {
 	res, _, err := c.eval(v, false, false, 0)
 	return res, err
+}
+
+// MustPrint returns an error if v is empty
+func (c *Context) MustPrint(v interface{}) (interface{}, error) {
+	if s, ok := v.(string); ok {
+		if s == "" {
+			return nil, errors.New("MustPrint got an empty variable.")
+		}
+	}
+	return v, nil
 }
 
 func (c *Context) graph(v interface{}, unit string, filter bool) (val interface{}, err error) {

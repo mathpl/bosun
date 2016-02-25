@@ -211,7 +211,7 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 		}
 		nots := ns.Get(s.Conf, incident.AlertKey.Group())
 
-		// Rendre the httpBodies first
+		// Render the httpBodies first
 		incident.NotificationHttpBodies = make(map[string][]byte, len(nots))
 		for name, n := range nots {
 			//Render notifications httpbody
@@ -219,11 +219,14 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 			httpBody, err := s.ExecuteHttpBody(r, a, incident, resolvedVarsLookup, n)
 			if err != nil {
 				slog.Infof("%s: %v", incident.AlertKey, err)
+				httpBody = nil
 			} else if httpBody == nil {
 				err = fmt.Errorf("Empty notification httpbody on %s for notification %s", incident.AlertKey, n.Name)
 				slog.Error(err)
 			}
 			endTiming()
+
+			fmt.Println("RENDERING")
 
 			incident.NotificationHttpBodies[name] = httpBody
 		}

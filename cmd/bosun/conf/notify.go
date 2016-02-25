@@ -31,8 +31,11 @@ func (n *Notification) Notify(subject, body string, emailsubject, emailbody, htt
 		go n.DoEmail(emailsubject, emailbody, c, ak, attachments...)
 	}
 	if n.Post != nil {
-		if httpBody != nil {
-			go n.DoPost(httpBody, ak)
+		// If we have a template for HttpBody, never fallback on subject+body
+		if n.HttpBody != nil {
+			if httpBody != nil {
+				go n.DoPost(httpBody, ak)
+			}
 		} else {
 			go n.DoPost(n.GetPayload(subject, body), ak)
 		}
