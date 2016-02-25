@@ -18,6 +18,8 @@ import (
 	"github.com/influxdata/influxdb/client"
 )
 
+const templateRenderMetric = "template.render"
+
 func init() {
 	metadata.AddMetricMeta(
 		"bosun.alerts.current_severity", metadata.Gauge, metadata.Alert,
@@ -184,9 +186,12 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 		}
 	}
 
+	// Get a copy of the alert's vars with lookup() resolved
+	resolvedVarsLookup := s.ExecuteVarLookup(r, a, incident)
+
 	//render templates and open alert key if abnormal
 	if event.Status > models.StNormal {
-		s.executeTemplates(incident, event, a, r)
+		s.executeTemplates(incident, event, a, r, resolvedVarsLookup, incident.AlertKey.Group(), event.Status)
 		incident.Open = true
 		if a.Log {
 			incident.Open = false
@@ -205,6 +210,23 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 			s.lastLogTimes[ak] = now
 		}
 		nots := ns.Get(s.Conf, incident.AlertKey.Group())
+
+		// Rendre the httpBodies first
+		incident.NotificationHttpBodies = make(map[string][]byte, len(nots))
+		for name, n := range nots {
+			//Render notifications httpbody
+			endTiming := collect.StartTimer(templateRenderMetric, opentsdb.TagSet{"alert": a.Name, "type": "body", "notification": n.Name})
+			httpBody, err := s.ExecuteHttpBody(r, a, incident, resolvedVarsLookup, n)
+			if err != nil {
+				slog.Infof("%s: %v", incident.AlertKey, err)
+			} else if httpBody == nil {
+				err = fmt.Errorf("Empty notification httpbody on %s for notification %s", incident.AlertKey, n.Name)
+				slog.Error(err)
+			}
+			endTiming()
+
+			incident.NotificationHttpBodies[name] = httpBody
+		}
 		for _, n := range nots {
 			s.Notify(incident, n)
 			checkNotify = true
@@ -259,13 +281,12 @@ func silencedOrIgnored(a *conf.Alert, event *models.Event, si *models.Silence) b
 	}
 	return false
 }
-func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.Event, a *conf.Alert, r *RunHistory) {
+func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.Event, a *conf.Alert, r *RunHistory, resolvedVarsLookup map[string]string, tags opentsdb.TagSet, status models.Status) {
 	if event.Status != models.StUnknown {
 		var errs []error
-		metric := "template.render"
 		//Render subject
-		endTiming := collect.StartTimer(metric, opentsdb.TagSet{"alert": a.Name, "type": "subject"})
-		subject, err := s.ExecuteSubject(r, a, state, false)
+		endTiming := collect.StartTimer(templateRenderMetric, opentsdb.TagSet{"alert": a.Name, "type": "subject"})
+		subject, err := s.ExecuteSubject(r, a, state, resolvedVarsLookup, false)
 		if err != nil {
 			slog.Infof("%s: %v", state.AlertKey, err)
 			errs = append(errs, err)
@@ -277,8 +298,8 @@ func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.E
 		endTiming()
 
 		//Render body
-		endTiming = collect.StartTimer(metric, opentsdb.TagSet{"alert": a.Name, "type": "body"})
-		body, _, err := s.ExecuteBody(r, a, state, false)
+		endTiming = collect.StartTimer(templateRenderMetric, opentsdb.TagSet{"alert": a.Name, "type": "body"})
+		body, _, err := s.ExecuteBody(r, a, state, resolvedVarsLookup, false)
 		if err != nil {
 			slog.Infof("%s: %v", state.AlertKey, err)
 			errs = append(errs, err)
@@ -290,8 +311,8 @@ func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.E
 		endTiming()
 
 		//Render email body
-		endTiming = collect.StartTimer(metric, opentsdb.TagSet{"alert": a.Name, "type": "emailbody"})
-		emailbody, attachments, err := s.ExecuteBody(r, a, state, true)
+		endTiming = collect.StartTimer(templateRenderMetric, opentsdb.TagSet{"alert": a.Name, "type": "emailbody"})
+		emailbody, attachments, err := s.ExecuteBody(r, a, state, resolvedVarsLookup, true)
 		if err != nil {
 			slog.Infof("%s: %v", state.AlertKey, err)
 			errs = append(errs, err)
@@ -303,8 +324,8 @@ func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.E
 		endTiming()
 
 		//Render email subject
-		endTiming = collect.StartTimer(metric, opentsdb.TagSet{"alert": a.Name, "type": "emailsubject"})
-		emailsubject, err := s.ExecuteSubject(r, a, state, true)
+		endTiming = collect.StartTimer(templateRenderMetric, opentsdb.TagSet{"alert": a.Name, "type": "emailsubject"})
+		emailsubject, err := s.ExecuteSubject(r, a, state, resolvedVarsLookup, true)
 		if err != nil {
 			slog.Infof("%s: %v", state.AlertKey, err)
 			errs = append(errs, err)
@@ -316,7 +337,7 @@ func (s *Schedule) executeTemplates(state *models.IncidentState, event *models.E
 		endTiming()
 
 		if errs != nil {
-			endTiming = collect.StartTimer(metric, opentsdb.TagSet{"alert": a.Name, "type": "bad"})
+			endTiming = collect.StartTimer(templateRenderMetric, opentsdb.TagSet{"alert": a.Name, "type": "bad"})
 			subject, body, err = s.ExecuteBadTemplate(errs, r, a, state)
 			endTiming()
 

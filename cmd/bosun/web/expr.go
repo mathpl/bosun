@@ -197,7 +197,7 @@ func procRule(t miniprofiler.Timer, c *conf.Conf, a *conf.Alert, now time.Time, 
 					b_err = fmt.Errorf(s)
 				}
 			}()
-			if body, _, b_err = s.ExecuteBody(rh, a, primaryIncident, false); b_err != nil {
+			if body, _, b_err = s.ExecuteBody(rh, a, primaryIncident, nil, false); b_err != nil {
 				warning = append(warning, b_err.Error())
 			}
 		}()
@@ -209,7 +209,7 @@ func procRule(t miniprofiler.Timer, c *conf.Conf, a *conf.Alert, now time.Time, 
 					s_err = fmt.Errorf(s)
 				}
 			}()
-			subject, s_err = s.ExecuteSubject(rh, a, primaryIncident, false)
+			subject, s_err = s.ExecuteSubject(rh, a, primaryIncident, nil, false)
 			if s_err != nil {
 				warning = append(warning, s_err.Error())
 			}
@@ -228,8 +228,8 @@ func procRule(t miniprofiler.Timer, c *conf.Conf, a *conf.Alert, now time.Time, 
 			n := conf.Notification{
 				Email: []*mail.Address{m},
 			}
-			email, attachments, b_err := s.ExecuteBody(rh, a, primaryIncident, true)
-			email_subject, s_err := s.ExecuteSubject(rh, a, primaryIncident, true)
+			email, attachments, b_err := s.ExecuteBody(rh, a, primaryIncident, nil, true)
+			email_subject, s_err := s.ExecuteSubject(rh, a, primaryIncident, nil, true)
 			if b_err != nil {
 				warning = append(warning, b_err.Error())
 			} else if s_err != nil {
@@ -238,7 +238,7 @@ func procRule(t miniprofiler.Timer, c *conf.Conf, a *conf.Alert, now time.Time, 
 				n.DoEmail(email_subject, email, schedule.Conf, string(primaryIncident.AlertKey), attachments...)
 			}
 		}
-		data = s.Data(rh, primaryIncident, a, false)
+		data = s.Data(rh, primaryIncident, a, nil, false)
 	}
 	return &ruleResult{
 		criticals,

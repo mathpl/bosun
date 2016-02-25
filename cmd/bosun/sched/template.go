@@ -24,21 +24,23 @@ import (
 
 type Context struct {
 	*models.IncidentState
-	Alert   *conf.Alert
-	IsEmail bool
+	Alert              *conf.Alert
+	ResolvedVarsLookup conf.Vars
+	IsEmail            bool
 
 	schedule    *Schedule
 	runHistory  *RunHistory
 	Attachments []*models.Attachment
 }
 
-func (s *Schedule) Data(rh *RunHistory, st *models.IncidentState, a *conf.Alert, isEmail bool) *Context {
+func (s *Schedule) Data(rh *RunHistory, st *models.IncidentState, a *conf.Alert, resolvedVarsLookup conf.Vars, isEmail bool) *Context {
 	c := Context{
-		IncidentState: st,
-		Alert:         a,
-		IsEmail:       isEmail,
-		schedule:      s,
-		runHistory:    rh,
+		IncidentState:      st,
+		Alert:              a,
+		IsEmail:            isEmail,
+		schedule:           s,
+		runHistory:         rh,
+		ResolvedVarsLookup: resolvedVarsLookup,
 	}
 	return &c
 }
@@ -121,12 +123,12 @@ func (c *Context) Incident() string {
 	})
 }
 
-func (s *Schedule) ExecuteBody(rh *RunHistory, a *conf.Alert, st *models.IncidentState, isEmail bool) ([]byte, []*models.Attachment, error) {
+func (s *Schedule) ExecuteBody(rh *RunHistory, a *conf.Alert, st *models.IncidentState, resolvedVarsLookup conf.Vars, isEmail bool) ([]byte, []*models.Attachment, error) {
 	t := a.Template
 	if t == nil || t.Body == nil {
 		return nil, nil, nil
 	}
-	c := s.Data(rh, st, a, isEmail)
+	c := s.Data(rh, st, a, resolvedVarsLookup, isEmail)
 	buf := new(bytes.Buffer)
 	if err := t.Body.Execute(buf, c); err != nil {
 		return nil, nil, err
@@ -139,14 +141,43 @@ func (s *Schedule) ExecuteBody(rh *RunHistory, a *conf.Alert, st *models.Inciden
 	return buf.Bytes(), c.Attachments, nil
 }
 
-func (s *Schedule) ExecuteSubject(rh *RunHistory, a *conf.Alert, st *models.IncidentState, isEmail bool) ([]byte, error) {
+func (s *Schedule) ExecuteSubject(rh *RunHistory, a *conf.Alert, st *models.IncidentState, resolvedVarsLookup conf.Vars, isEmail bool) ([]byte, error) {
 	t := a.Template
 	if t == nil || t.Subject == nil {
 		return nil, nil
 	}
 	buf := new(bytes.Buffer)
-	err := t.Subject.Execute(buf, s.Data(rh, st, a, isEmail))
+	err := t.Subject.Execute(buf, s.Data(rh, st, a, resolvedVarsLookup, isEmail))
 	return bytes.Join(bytes.Fields(buf.Bytes()), []byte(" ")), err
+}
+
+func (s *Schedule) ExecuteHttpBody(rh *RunHistory, a *conf.Alert, st *models.IncidentState, resolvedVarsLookup conf.Vars, n *conf.Notification) ([]byte, error) {
+	if n == nil || n.HttpBody == nil {
+		return nil, nil
+	}
+	buf := new(bytes.Buffer)
+	err := n.HttpBody.Execute(buf, s.Data(rh, st, a, resolvedVarsLookup, false))
+	return buf.Bytes(), err
+}
+
+func (s *Schedule) ExecuteVarLookup(rh *RunHistory, a *conf.Alert, st *models.IncidentState) conf.Vars {
+	// Resolve lookup in vars
+	resolved := make(conf.Vars)
+	for k, v := range a.Vars {
+		if lookup := conf.LookupRE.FindStringSubmatch(v); lookup != nil {
+			result, err := s.Data(rh, st, a, nil, false).Lookup(lookup[1], lookup[2])
+			if err != nil {
+				slog.Errorf("error while resolving lookup for %s = %s:%s", k, v, err)
+				resolved[k] = ""
+			} else {
+				resolved[k] = result
+			}
+		} else {
+			resolved[k] = v
+		}
+	}
+
+	return resolved
 }
 
 var error_body = template.Must(template.New("body_error_template").Parse(`
@@ -180,7 +211,7 @@ func (s *Schedule) ExecuteBadTemplate(errs []error, rh *RunHistory, a *conf.Aler
 		*Context
 	}{
 		Errors:  errs,
-		Context: s.Data(rh, st, a, true),
+		Context: s.Data(rh, st, a, nil, true),
 	}
 	buf := new(bytes.Buffer)
 	error_body.Execute(buf, c)

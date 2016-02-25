@@ -325,6 +325,7 @@ type Notification struct {
 	Email        []*mail.Address
 	Post, Get    *url.URL
 	Body         *ttemplate.Template
+	HttpBody     *ttemplate.Template
 	Print        bool
 	Next         *Notification
 	Timeout      time.Duration
@@ -336,6 +337,7 @@ type Notification struct {
 	email     string
 	post, get string
 	body      string
+	httpBody  string
 }
 
 func (n *Notification) MarshalJSON() ([]byte, error) {
@@ -843,7 +845,7 @@ func (c *Conf) loadTemplate(s *parse.SectionNode) {
 	c.Templates[name] = &t
 }
 
-var lookupNotificationRE = regexp.MustCompile(`^lookup\("(.*)", "(.*)"\)$`)
+var LookupRE = regexp.MustCompile(`^lookup\("(.*)",\s*"(.*)"\)$`)
 
 func (c *Conf) loadAlert(s *parse.SectionNode) {
 	name := s.Name.Text
@@ -858,7 +860,7 @@ func (c *Conf) loadAlert(s *parse.SectionNode) {
 	}
 	a.Text = s.RawText
 	procNotification := func(v string, ns *Notifications) {
-		if lookup := lookupNotificationRE.FindStringSubmatch(v); lookup != nil {
+		if lookup := LookupRE.FindStringSubmatch(v); lookup != nil {
 			if ns.Lookups == nil {
 				ns.Lookups = make(map[string]*Lookup)
 			}
@@ -1116,6 +1118,15 @@ func (c *Conf) loadNotification(s *parse.SectionNode) {
 				c.error(err)
 			}
 			n.Body = tmpl
+		case "httpBody":
+			n.httpBody = v
+			tmpl := ttemplate.New(name).Funcs(funcs)
+			_, err := tmpl.Parse(n.httpBody)
+			if err != nil {
+				c.error(err)
+			}
+			n.HttpBody = tmpl
+
 		case "runOnActions":
 			n.RunOnActions = v == "true"
 		case "useBody":
@@ -1272,6 +1283,7 @@ func (c *Conf) Funcs() map[string]eparse.Func {
 				Group: tag,
 			})
 		}
+
 		return results, nil
 	}
 	lookupSeries := func(e *expr.State, T miniprofiler.Timer, series *expr.Results, lookup, key string) (results *expr.Results, err error) {

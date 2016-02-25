@@ -26,12 +26,16 @@ func init() {
 		"The number of email notifications that Bosun failed to send.")
 }
 
-func (n *Notification) Notify(subject, body string, emailsubject, emailbody []byte, c *Conf, ak string, attachments ...*models.Attachment) {
+func (n *Notification) Notify(subject, body string, emailsubject, emailbody, httpBody []byte, c *Conf, ak string, attachments ...*models.Attachment) {
 	if len(n.Email) > 0 {
 		go n.DoEmail(emailsubject, emailbody, c, ak, attachments...)
 	}
 	if n.Post != nil {
-		go n.DoPost(n.GetPayload(subject, body), ak)
+		if httpBody != nil {
+			go n.DoPost(httpBody, ak)
+		} else {
+			go n.DoPost(n.GetPayload(subject, body), ak)
+		}
 	}
 	if n.Get != nil {
 		go n.DoGet(ak)
