@@ -28,6 +28,8 @@ type IncidentState struct {
 	EmailSubject []byte
 	Attachments  []*Attachment
 
+	NotificationHttpBodies map[string][]byte
+
 	NeedAck bool
 	Open    bool
 
