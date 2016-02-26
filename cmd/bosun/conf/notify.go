@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"errors"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/mail"
@@ -93,7 +94,8 @@ func (n *Notification) DoPost(payload []byte, ak string) {
 		defer resp.Body.Close()
 	}
 	if err != nil {
-		slog.Error(err)
+		body, _ := ioutil.ReadAll(resp.Body)
+		slog.Errorf("%s: %s", string(body))
 		return
 	}
 	if resp.StatusCode >= 300 {
