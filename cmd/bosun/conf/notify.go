@@ -99,7 +99,7 @@ func (n *Notification) DoPost(payload []byte, ak string) {
 	}
 	if resp.StatusCode >= 300 {
 		body, _ := ioutil.ReadAll(resp.Body)
-		slog.Errorf("bad response on notification post:%s payload: %s", resp.Status, string(body))
+		slog.Errorf("bad response on notification post:%s payload sent: %s payload received:%s", resp.Status, string(payload), string(body))
 	} else {
 		slog.Infof("post notification successful for alert %s. Response code %d.", ak, resp.StatusCode)
 	}
