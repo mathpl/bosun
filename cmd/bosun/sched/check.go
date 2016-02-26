@@ -226,8 +226,6 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 			}
 			endTiming()
 
-			fmt.Println("RENDERING")
-
 			incident.NotificationHttpBodies[name] = httpBody
 		}
 		for _, n := range nots {
