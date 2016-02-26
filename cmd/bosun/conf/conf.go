@@ -28,6 +28,8 @@ import (
 	"github.com/influxdata/influxdb/client"
 )
 
+var InternetProxy *url.URL
+
 type Conf struct {
 	Vars
 	Name            string        // Config file name
@@ -64,7 +66,6 @@ type Conf struct {
 	Quiet            bool
 	NoSleep          bool
 	ShortURLKey      string
-	InternetProxy    string
 	MinGroupSize     int
 
 	TSDBHost             string                    // OpenTSDB relay and query destination: ny-devtsdb04:4242
@@ -321,17 +322,18 @@ type Template struct {
 type Notification struct {
 	Text string
 	Vars
-	Name         string
-	Email        []*mail.Address
-	Post, Get    *url.URL
-	Body         *ttemplate.Template
-	HttpBody     *ttemplate.Template
-	Print        bool
-	Next         *Notification
-	Timeout      time.Duration
-	ContentType  string
-	RunOnActions bool
-	UseBody      bool
+	Name             string
+	Email            []*mail.Address
+	Post, Get        *url.URL
+	Body             *ttemplate.Template
+	HttpBody         *ttemplate.Template
+	Print            bool
+	Next             *Notification
+	Timeout          time.Duration
+	ContentType      string
+	RunOnActions     bool
+	UseBody          bool
+	UseInternetProxy bool
 
 	next      string
 	email     string
@@ -561,7 +563,11 @@ func (c *Conf) loadGlobal(p *parse.PairNode) {
 	case "shortURLKey":
 		c.ShortURLKey = v
 	case "internetProxy":
-		c.InternetProxy = v
+		var err error
+		InternetProxy, err = url.Parse(v)
+		if err != nil {
+			c.errorf("InternetProxy error: %s", err)
+		}
 	case "ledisDir":
 		c.LedisDir = v
 	case "redisHost":
@@ -1126,11 +1132,12 @@ func (c *Conf) loadNotification(s *parse.SectionNode) {
 				c.error(err)
 			}
 			n.HttpBody = tmpl
-
 		case "runOnActions":
 			n.RunOnActions = v == "true"
 		case "useBody":
 			n.UseBody = v == "true"
+		case "useInternetProxy":
+			n.UseInternetProxy = v == "true"
 		default:
 			c.errorf("unknown key %s", k)
 		}

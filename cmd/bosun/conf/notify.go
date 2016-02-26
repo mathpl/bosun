@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"crypto/tls"
 	"errors"
+	"net"
 	"net/http"
 	"net/mail"
 	"net/smtp"
 	"strings"
+	"time"
 
 	"bosun.org/collect"
 	"bosun.org/metadata"
@@ -73,7 +75,20 @@ func (n *Notification) DoPost(payload []byte, ak string) {
 		}
 		payload = buf.Bytes()
 	}
-	resp, err := http.Post(n.Post.String(), n.ContentType, bytes.NewBuffer(payload))
+
+	transport := &http.Transport{
+		Dial: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).Dial,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	if n.UseInternetProxy && InternetProxy != nil {
+		transport.Proxy = http.ProxyURL(InternetProxy)
+	}
+	c := http.Client{Transport: transport}
+
+	resp, err := c.Post(n.Post.String(), n.ContentType, bytes.NewBuffer(payload))
 	if resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 	}

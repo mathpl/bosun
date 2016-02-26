@@ -38,7 +38,6 @@ var (
 	indexTemplate   func() *template.Template
 	router          = mux.NewRouter()
 	schedule        = sched.DefaultSched
-	InternetProxy   *url.URL
 	annotateBackend backend.Backend
 )
 
@@ -320,8 +319,8 @@ func Shorten(w http.ResponseWriter, r *http.Request) {
 		}).Dial,
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
-	if InternetProxy != nil {
-		transport.Proxy = http.ProxyURL(InternetProxy)
+	if conf.InternetProxy != nil {
+		transport.Proxy = http.ProxyURL(conf.InternetProxy)
 	}
 	c := http.Client{Transport: transport}
 
