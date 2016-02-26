@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"errors"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/mail"
@@ -97,6 +98,7 @@ func (n *Notification) DoPost(payload []byte, ak string) {
 		return
 	}
 	if resp.StatusCode >= 300 {
+		body, _ := ioutil.ReadAll(resp.Body)
 		slog.Errorf("bad response on notification post:%s payload: %s", resp.Status, string(body))
 	} else {
 		slog.Infof("post notification successful for alert %s. Response code %d.", ak, resp.StatusCode)
