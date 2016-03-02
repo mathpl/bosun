@@ -65,6 +65,7 @@ type Conf struct {
 	Squelch          Squelches `json:"-"`
 	Quiet            bool
 	NoSleep          bool
+	NewNotifications bool
 	ShortURLKey      string
 	MinGroupSize     int
 
@@ -243,22 +244,27 @@ type Macro struct {
 type Alert struct {
 	Text string
 	Vars
-	*Template        `json:"-"`
-	Name             string
-	Crit             *expr.Expr `json:",omitempty"`
-	Warn             *expr.Expr `json:",omitempty"`
-	Depends          *expr.Expr `json:",omitempty"`
-	Squelch          Squelches  `json:"-"`
-	CritNotification *Notifications
-	WarnNotification *Notifications
-	Unknown          time.Duration
-	MaxLogFrequency  time.Duration
-	IgnoreUnknown    bool
-	UnknownsNormal   bool
-	UnjoinedOK       bool `json:",omitempty"`
-	Log              bool
-	RunEvery         int
-	returnType       models.FuncType
+	*Template `json:"-"`
+	Name      string
+	Crit      *expr.Expr `json:",omitempty"`
+	Warn      *expr.Expr `json:",omitempty"`
+	Depends   *expr.Expr `json:",omitempty"`
+	Squelch   Squelches  `json:"-"`
+
+	CritNotification   *Notifications
+	WarnNotification   *Notifications
+	AckNotification    *Notifications
+	NormalNotification *Notifications
+	CloseNotification  *Notifications
+
+	Unknown         time.Duration
+	MaxLogFrequency time.Duration
+	IgnoreUnknown   bool
+	UnknownsNormal  bool
+	UnjoinedOK      bool `json:",omitempty"`
+	Log             bool
+	RunEvery        int
+	returnType      models.FuncType
 
 	template string
 	squelch  []string
@@ -335,11 +341,12 @@ type Notification struct {
 	UseBody          bool
 	UseInternetProxy bool
 
-	next      string
-	email     string
-	post, get string
-	body      string
-	httpBody  string
+	next               string
+	email              string
+	post, get          string
+	body               string
+	httpBody           string
+	groupNotifications bool
 }
 
 func (n *Notification) MarshalJSON() ([]byte, error) {
@@ -507,6 +514,8 @@ func (c *Conf) loadGlobal(p *parse.PairNode) {
 		c.PingDuration = d
 	case "noSleep":
 		c.NoSleep = true
+	case "newNotifications":
+		c.NewNotifications = true
 	case "unknownThreshold":
 		i, err := strconv.Atoi(v)
 		if err != nil {
@@ -859,10 +868,13 @@ func (c *Conf) loadAlert(s *parse.SectionNode) {
 		c.errorf("duplicate alert name: %s", name)
 	}
 	a := Alert{
-		Vars:             make(map[string]string),
-		Name:             name,
-		CritNotification: new(Notifications),
-		WarnNotification: new(Notifications),
+		Vars:               make(map[string]string),
+		Name:               name,
+		CritNotification:   new(Notifications),
+		WarnNotification:   new(Notifications),
+		AckNotification:    new(Notifications),
+		NormalNotification: new(Notifications),
+		CloseNotification:  new(Notifications),
 	}
 	a.Text = s.RawText
 	procNotification := func(v string, ns *Notifications) {
@@ -925,6 +937,12 @@ func (c *Conf) loadAlert(s *parse.SectionNode) {
 			procNotification(v, a.CritNotification)
 		case "warnNotification":
 			procNotification(v, a.WarnNotification)
+		case "ackNotification":
+			procNotification(v, a.AckNotification)
+		case "normalNotification":
+			procNotification(v, a.NormalNotification)
+		case "closeNotification":
+			procNotification(v, a.CloseNotification)
 		case "unknown":
 			od, err := opentsdb.ParseDuration(v)
 			if err != nil {
@@ -1069,6 +1087,7 @@ func (c *Conf) loadNotification(s *parse.SectionNode) {
 			return string(b)
 		},
 	}
+
 	c.Notifications[name] = &n
 	pairs := c.getPairs(s, n.Vars, sNormal)
 	for _, p := range pairs {

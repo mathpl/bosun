@@ -328,6 +328,15 @@ func (c *Context) MustPrint(v interface{}) (interface{}, error) {
 	return v, nil
 }
 
+func (c *Context) LastAction() (interface{}, error) {
+	nbActions := len(c.Actions)
+	if nbActions > 0 {
+		return c.Actions[nbActions-1], nil
+	} else {
+		return nil, nil
+	}
+}
+
 func (c *Context) graph(v interface{}, unit string, filter bool) (val interface{}, err error) {
 	defer func() {
 		if p := recover(); p != nil {

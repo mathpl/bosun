@@ -246,6 +246,8 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 			notify(a.CritNotification)
 		case models.StWarning:
 			notify(a.WarnNotification)
+		case models.StNormal:
+			notify(a.NormalNotification)
 		}
 	}
 

@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"bosun.org/cmd/bosun/conf"
+	"bosun.org/collect"
 	"bosun.org/models"
+	"bosun.org/opentsdb"
 	"bosun.org/slog"
 )
 
@@ -283,32 +285,85 @@ func init() {
 }
 
 func (s *Schedule) ActionNotify(at models.ActionType, user, message string, aks []models.AlertKey) error {
-	groupings, err := s.groupActionNotifications(aks)
-	if err != nil {
-		return err
-	}
-	for notification, states := range groupings {
-		incidents := []*models.IncidentState{}
-		for _, state := range states {
-			incidents = append(incidents, state)
-		}
-		data := actionNotificationContext{incidents, user, message, at, s}
+	if s.Conf.NewNotifications {
+		for _, ak := range aks {
+			alert := s.Conf.Alerts[ak.Name()]
 
-		buf := &bytes.Buffer{}
-		err := actionNotificationSubjectTemplate.Execute(buf, data)
+			state, err := s.DataAccess.State().GetLatestIncident(ak)
+			if err != nil {
+				return err
+			}
+			if alert == nil || state == nil {
+				continue
+			}
+
+			var ns *conf.Notifications
+			switch at {
+			case models.ActionAcknowledge:
+				ns = alert.AckNotification
+			case models.ActionForget:
+				fallthrough
+			case models.ActionForceClose:
+				fallthrough
+			case models.ActionPurge:
+				fallthrough
+			case models.ActionClose:
+				ns = alert.CloseNotification
+			}
+
+			if ns != nil {
+				resolvedVarsLookup := s.ExecuteVarLookup(nil, alert, state)
+
+				nots := ns.Get(s.Conf, ak.Group())
+				// Render the httpBodies first
+				for name, n := range nots {
+					//Render notifications httpbody
+					endTiming := collect.StartTimer(templateRenderMetric, opentsdb.TagSet{"alert": alert.Name, "type": "body", "notification": n.Name})
+					httpBody, err := s.ExecuteHttpBody(nil, alert, state, resolvedVarsLookup, n)
+					if err != nil {
+						slog.Infof("%s: %v", state.AlertKey, err)
+						httpBody = nil
+					} else if httpBody == nil {
+						err = fmt.Errorf("Empty notification httpbody on %s for notification %s", state.AlertKey, n.Name)
+						slog.Error(err)
+					}
+					endTiming()
+
+					state.NotificationHttpBodies[name] = httpBody
+					s.notify(state, n)
+				}
+			}
+		}
+	} else {
+		groupings, err := s.groupActionNotifications(aks)
 		if err != nil {
-			slog.Error("Error rendering action notification subject", err)
+			return err
 		}
-		subject := buf.String()
+		for notification, states := range groupings {
+			incidents := []*models.IncidentState{}
+			for _, state := range states {
+				incidents = append(incidents, state)
+			}
 
-		buf = &bytes.Buffer{}
-		err = actionNotificationBodyTemplate.Execute(buf, data)
-		if err != nil {
-			slog.Error("Error rendering action notification body", err)
+			data := actionNotificationContext{incidents, user, message, at, s}
+
+			buf := &bytes.Buffer{}
+			err := actionNotificationSubjectTemplate.Execute(buf, data)
+			if err != nil {
+				slog.Error("Error rendering action notification subject", err)
+			}
+			subject := buf.String()
+
+			buf = &bytes.Buffer{}
+			err = actionNotificationBodyTemplate.Execute(buf, data)
+			if err != nil {
+				slog.Error("Error rendering action notification body", err)
+			}
+			body := buf.String()
+
+			notification.Notify(subject, body, []byte(subject), buf.Bytes(), nil, s.Conf, "actionNotification")
 		}
-		body := buf.String()
 
-		notification.Notify(subject, body, []byte(subject), buf.Bytes(), nil, s.Conf, "actionNotification")
 	}
 	return nil
 }
