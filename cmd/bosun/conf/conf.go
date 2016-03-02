@@ -1194,7 +1194,7 @@ func (c *Conf) Expand(v string, vars map[string]string, ignoreBadExpand bool) st
 func (c *Conf) seen(v string, m map[string]bool) {
 	if m[v] {
 		switch v {
-		case "squelch", "critNotification", "warnNotification", "graphiteHeader":
+		case "squelch", "critNotification", "warnNotification", "normalNotification", "closeNotification", "ackNotification", "graphiteHeader":
 			// ignore
 		default:
 			c.errorf("duplicate key: %s", v)
