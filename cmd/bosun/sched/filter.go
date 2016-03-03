@@ -71,6 +71,9 @@ func makeFilter(filter string) (func(*conf.Conf, *conf.Alert, *models.IncidentSt
 				}
 				f(a.CritNotification)
 				f(a.WarnNotification)
+				f(a.AckNotification)
+				f(a.NormalNotification)
+				f(a.CloseNotification)
 				return r
 			})
 		case "status":
