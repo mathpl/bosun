@@ -124,6 +124,12 @@ func (c *Context) Incident() string {
 	})
 }
 
+func (c *Context) FilteredIncident() string {
+	return c.schedule.Conf.MakeLink("/", &url.Values{
+		"filter": []string{"id:" + fmt.Sprint(c.Id)},
+	})
+}
+
 func (s *Schedule) ExecuteBody(rh *RunHistory, a *conf.Alert, st *models.IncidentState, resolvedVarsLookup conf.Vars, isEmail bool) ([]byte, []*models.Attachment, error) {
 	t := a.Template
 	if t == nil || t.Body == nil {

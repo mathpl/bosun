@@ -2,6 +2,7 @@ package sched
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"bosun.org/cmd/bosun/conf"
@@ -45,6 +46,12 @@ func makeFilter(filter string) (func(*conf.Conf, *conf.Alert, *models.IncidentSt
 				ak := s.AlertKey
 				return strings.Contains(string(ak), value) || strings.Contains(string(s.Subject), value)
 			})
+		case "id":
+			if id, err := strconv.Atoi(value); err == nil {
+				add(func(c *conf.Conf, a *conf.Alert, s *models.IncidentState) bool {
+					return s.Id == int64(id)
+				})
+			}
 		case "ack":
 			var v bool
 			switch value {
