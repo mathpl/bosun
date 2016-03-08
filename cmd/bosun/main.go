@@ -92,7 +92,7 @@ func main() {
 	}
 	httpListen := &url.URL{
 		Scheme: "http",
-		Host:   c.HTTPListen,
+		Host:   c.ReportMetricsHost,
 	}
 	if strings.HasPrefix(httpListen.Host, ":") {
 		httpListen.Host = "localhost" + httpListen.Host
@@ -115,7 +115,7 @@ func main() {
 		}()
 	}
 	if c.TSDBHost != "" {
-		if err := collect.Init(c.TSDBHost, "bosun"); err != nil {
+		if err := collect.Init(httpListen, "bosun"); err != nil {
 			slog.Fatal(err)
 		}
 		tsdbHost := &url.URL{

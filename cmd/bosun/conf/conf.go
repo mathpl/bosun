@@ -47,6 +47,8 @@ type Conf struct {
 	StateFile       string
 	LedisDir        string
 
+	ReportMetricsHost string
+
 	RedisHost     string
 	RedisDb       int
 	RedisPassword string
@@ -589,6 +591,8 @@ func (c *Conf) loadGlobal(p *parse.PairNode) {
 			c.error(err)
 		}
 		c.RedisDb = i
+	case "reportMetricsHost":
+		c.ReportMetricsHost = v
 	case "annotateElasticHosts":
 		c.AnnotateElasticHosts = strings.Split(v, ",")
 	case "annotationIndex":
@@ -605,6 +609,10 @@ func (c *Conf) loadGlobal(p *parse.PairNode) {
 		}
 		c.Vars[k] = v
 		c.Vars[k[1:]] = c.Vars[k]
+	}
+
+	if c.ReportMetricsHost == "" {
+		c.ReportMetricsHost = c.HTTPListen
 	}
 }
 
