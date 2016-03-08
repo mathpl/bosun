@@ -115,7 +115,7 @@ func main() {
 		}()
 	}
 	if c.TSDBHost != "" {
-		if err := collect.Init(httpListen, "bosun"); err != nil {
+		if err := collect.Init(c.TSDBHost, "bosun"); err != nil {
 			slog.Fatal(err)
 		}
 		tsdbHost := &url.URL{
