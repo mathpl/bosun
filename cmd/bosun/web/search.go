@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"bosun.org/opentsdb"
@@ -39,7 +40,16 @@ func TagValuesByMetricTagKey(t miniprofiler.Timer, w http.ResponseWriter, r *htt
 	vars := mux.Vars(r)
 	metric := vars["metric"]
 	tagk := vars["tagk"]
-	return schedule.Search.TagValuesByMetricTagKey(metric, tagk, 0)
+	q := r.URL.Query()
+	if len(q) > 0 {
+		tsf := make(map[string]string)
+		for k, v := range q {
+			tsf[k] = strings.Join(v, "")
+		}
+		return schedule.Search.FilteredTagValuesByMetricTagKey(metric, tagk, tsf)
+	} else {
+		return schedule.Search.TagValuesByMetricTagKey(metric, tagk, 0)
+	}
 }
 
 func FilteredTagsetsByMetric(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {

@@ -178,6 +178,52 @@ func (d *dataAccess) GetMetricTagSets(metric string, tags opentsdb.TagSet) (map[
 	return result, nil
 }
 
+func (d *dataAccess) GetMetricTagValues(metric, tagk string, tags opentsdb.TagSet) ([]string, error) {
+	defer collect.StartTimer("redis", opentsdb.TagSet{"op": "GetMetricTagSets"})()
+	conn := d.GetConnection()
+	defer conn.Close()
+
+	var cursor = "0"
+	result := make(map[string]bool)
+
+	for {
+		vals, err := redis.Values(conn.Do(d.HSCAN(), searchMetricTagSetKey(metric), cursor))
+		if err != nil {
+			return nil, slog.Wrap(err)
+		}
+		cursor, err = redis.String(vals[0], nil)
+		if err != nil {
+			return nil, slog.Wrap(err)
+		}
+		mtss, err := stringInt64Map(vals[1], nil)
+		if err != nil {
+			return nil, slog.Wrap(err)
+		}
+		for mts, _ := range mtss {
+			ts, err := opentsdb.ParseTags(mts)
+			if err != nil {
+				return nil, slog.Wrap(err)
+			}
+			if ts.Subset(tags) {
+				if v, ok := ts[tagk]; ok {
+					result[v] = true
+				}
+			}
+		}
+
+		if cursor == "" || cursor == "0" {
+			break
+		}
+	}
+
+	var values []string
+	for v, _ := range result {
+		values = append(values, v)
+	}
+
+	return values, nil
+}
+
 func (d *dataAccess) BackupLastInfos(m map[string]map[string]*LastInfo) error {
 	defer collect.StartTimer("redis", opentsdb.TagSet{"op": "BackupLast"})()
 	conn := d.GetConnection()

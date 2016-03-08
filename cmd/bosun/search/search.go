@@ -144,7 +144,6 @@ func getFloat(unk interface{}) (float64, error) {
 func Match(search string, values []string) ([]string, error) {
 	v := strings.Replace(search, ".", `\.`, -1)
 	v = strings.Replace(v, "*", ".*", -1)
-	v = "^" + v + "$"
 	re, err := regexp.Compile(v)
 	if err != nil {
 		return nil, err
@@ -332,4 +331,8 @@ func (s *Search) FilteredTagSets(metric string, tags opentsdb.TagSet) ([]opentsd
 		r = append(r, ts)
 	}
 	return r, nil
+}
+
+func (s *Search) FilteredTagValuesByMetricTagKey(metric, tagk string, tsf map[string]string) ([]string, error) {
+	return s.DataAccess.Search().GetMetricTagValues(metric, tagk, tsf)
 }
