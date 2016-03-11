@@ -45,7 +45,7 @@ func (s *StreamCollector) Run(dpchan chan<- *opentsdb.DataPoint, quit <-chan str
 					dp.Tags["host"] = util.Hostname
 				}
 				s.ApplyTagOverrides(dp.Tags)
-				if dp.CleanAndValid() {
+				if dp.CleanAndValidate() {
 					dpchan <- dp
 					count++
 				} else {
