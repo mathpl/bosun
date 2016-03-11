@@ -258,7 +258,7 @@ func AddTS(md *opentsdb.MultiDataPoint, name string, ts int64, value interface{}
 		Value:     value,
 		Tags:      tags,
 	}
-	if d.CleanAndValid() {
+	if d.CleanAndValidate() {
 		*md = append(*md, &d)
 		if rate != metadata.Unknown {
 			metadata.AddMeta(name, nil, "rate", rate, false)
