@@ -270,7 +270,11 @@ func AddTS(md *opentsdb.MultiDataPoint, name string, ts int64, value interface{}
 			metadata.AddMeta(name, tags, "desc", desc, false)
 		}
 	} else {
-		slog.Errorf("Invalid datapoint received for: %s", name)
+		if invalid, err := dp.MarshalJSON(); err == nil {
+			slog.Errorf("Invalid datapoint received for: %s", invalid)
+		} else {
+			slog.Errorf("Invalid datapoint received for: %s", dp.Metric)
+		}
 	}
 }
 
