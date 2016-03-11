@@ -87,6 +87,14 @@ func (d *DataPoint) MarshalJSON() ([]byte, error) {
 }
 
 // Valid returns whether d contains valid data (populated fields, valid tags)
+func (d *DataPoint) CleanAndValidate() bool {
+	if err := d.clean(); err != nil {
+		return false
+	}
+	return d.Valid()
+}
+
+// Valid returns whether d contains valid data (populated fields, valid tags)
 // for submission to OpenTSDB.
 func (d *DataPoint) Valid() bool {
 	if d.Metric == "" || d.Timestamp == 0 || d.Value == nil || !d.Tags.Valid() {
