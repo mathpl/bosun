@@ -50,9 +50,9 @@ func (s *StreamCollector) Run(dpchan chan<- *opentsdb.DataPoint, quit <-chan str
 					count++
 				} else {
 					if invalid, err := dp.MarshalJSON(); err == nil {
-						slog.Errorf("Invalid datapoint received for: %s", invalid)
+						slog.Errorf("Invalid datapoint received: %s", invalid)
 					} else {
-						slog.Errorf("Invalid datapoint received for: %s", dp.Metric)
+						slog.Errorf("Invalid datapoint received for %s, unable to marshall: %s", dp.Metric, err)
 					}
 				}
 			}
