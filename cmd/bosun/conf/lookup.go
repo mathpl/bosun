@@ -8,8 +8,9 @@ import (
 
 // TODO: remove this and merge it with Lookup
 type ExprLookup struct {
-	Tags    []string
-	Entries []*ExprEntry
+	Tags       []string
+	Entries    []*ExprEntry
+	UnjoinedOK bool
 }
 
 type ExprEntry struct {
@@ -25,7 +26,12 @@ func (lookup *ExprLookup) Get(key string, tag opentsdb.TagSet) (value string, ok
 		}
 		match := true
 		for ak, av := range entry.AlertKey.Group() {
-			matches, err := search.Match(av, []string{tag[ak]})
+			tagv, found := tag[ak]
+			if !found && lookup.UnjoinedOK {
+				match = true
+				break
+			}
+			matches, err := search.Match(av, []string{tagv})
 			if err != nil {
 				return "", false
 			}

@@ -215,15 +215,17 @@ func errRecover(errp *error) {
 }
 
 type Lookup struct {
-	Text    string
-	Name    string
-	Tags    []string
-	Entries []*Entry
+	Text       string
+	Name       string
+	Tags       []string
+	Entries    []*Entry
+	UnjoinedOK bool
 }
 
 func (lookup *Lookup) ToExpr() *ExprLookup {
 	l := ExprLookup{
-		Tags: lookup.Tags,
+		Tags:       lookup.Tags,
+		UnjoinedOK: lookup.UnjoinedOK,
 	}
 	for _, entry := range lookup.Entries {
 		l.Entries = append(l.Entries, entry.ExprEntry)
@@ -759,6 +761,15 @@ func (c *Conf) loadLookup(s *parse.SectionNode) {
 				}
 			}
 			l.Entries = append(l.Entries, &e)
+		case *parse.PairNode:
+			if n.Key.Text != "unjoinedOK" {
+				c.errorf("unexpected pair node in lookup: %s", n.Key.Text)
+			}
+			b, err := strconv.ParseBool(n.Val.Text)
+			if err != nil {
+				c.errorf("invalid value for unjoinedOK")
+			}
+			l.UnjoinedOK = b
 		default:
 			c.errorf("unexpected node")
 		}
