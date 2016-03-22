@@ -24,11 +24,14 @@ func (lookup *ExprLookup) Get(key string, tag opentsdb.TagSet) (value string, ok
 		if !ok {
 			continue
 		}
-		match := true
+
+		var nbMatch, unjoinedMatch int
+		needMatch := len(entry.AlertKey.Group())
 		for ak, av := range entry.AlertKey.Group() {
 			tagv, found := tag[ak]
 			if !found && lookup.UnjoinedOK {
-				match = true
+				nbMatch++
+				unjoinedMatch++
 				break
 			}
 			matches, err := search.Match(av, []string{tagv})
@@ -36,11 +39,15 @@ func (lookup *ExprLookup) Get(key string, tag opentsdb.TagSet) (value string, ok
 				return "", false
 			}
 			if len(matches) == 0 {
-				match = false
 				break
 			}
+
+			nbMatch++
 		}
-		if !match {
+
+		// If we're not fully matched keep going
+		// If we're only matched through unjoined match keep going as well
+		if nbMatch != needMatch || unjoinedMatch == needMatch {
 			continue
 		}
 		return
