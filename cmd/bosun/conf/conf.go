@@ -46,6 +46,7 @@ type Conf struct {
 	EmailFrom       string
 	StateFile       string
 	LedisDir        string
+	LedisBindAddr   string
 
 	ReportMetricsHost string
 
@@ -376,6 +377,7 @@ func New(name, text string) (c *Conf, err error) {
 		HTTPListen:       ":8070",
 		StateFile:        "bosun.state",
 		LedisDir:         "ledis_data",
+		LedisBindAddr:    "127.0.0.1:9565",
 		MinGroupSize:     5,
 		PingDuration:     time.Hour * 24,
 		ResponseLimit:    1 << 20, // 1MB
@@ -583,6 +585,8 @@ func (c *Conf) loadGlobal(p *parse.PairNode) {
 		}
 	case "ledisDir":
 		c.LedisDir = v
+	case "ledisBindAddr":
+		c.LedisBindAddr = v
 	case "redisHost":
 		c.RedisHost = v
 	case "redisPassword":

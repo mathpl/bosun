@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"bosun.org/_version"
 	"bosun.org/cmd/bosun/conf"
 	"bosun.org/cmd/bosun/database"
 	"bosun.org/cmd/bosun/sched"
@@ -26,7 +27,6 @@ import (
 	"bosun.org/opentsdb"
 	"bosun.org/slog"
 	"bosun.org/util"
-	"bosun.org/version"
 
 	"github.com/MiniProfiler/go/miniprofiler"
 	"github.com/gorilla/mux"
@@ -345,7 +345,10 @@ func HealthCheck(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (
 }
 
 func OpenTSDBVersion(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	return schedule.Conf.TSDBContext().Version(), nil
+	if schedule.Conf.TSDBContext() != nil {
+		return schedule.Conf.TSDBContext().Version(), nil
+	}
+	return opentsdb.Version{0, 0}, nil
 }
 
 func AnnotateEnabled(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {

@@ -1,6 +1,6 @@
 // Package version holds some version data common to bosun and scollector.
 // Most of these values will be inserted at build time with `-ldFlags` directives for official builds.
-package version // import "bosun.org/version"
+package version // import "bosun.org/_version"
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 // build.go will set date and sha, but `go get` will set none of these.
 var (
 	// Version number for official releases Updated manually before each release.
-	Version = "0.5.0-alpha"
+	Version = "0.5.0-rc2"
 
 	// Set to any non-empty value by official release script
 	OfficialBuild string

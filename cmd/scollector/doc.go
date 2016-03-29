@@ -22,8 +22,9 @@ The flags are:
 	-h=""
 		OpenTSDB or Bosun host. Overrides Host in conf file.
 	-f=""
-		Filters collectors matching these terms, separated by
-		comma. Overrides Filter in conf file.
+		Only include collectors matching these comma separated terms. Prefix
+		with - to invert match and exclude collectors matching those terms. Use
+		*,-term,-anotherterm to include all collectors except excluded terms.
 	-b=0
 		OpenTSDB batch size. Default is 500.
 	-conf=""
@@ -102,10 +103,12 @@ Default is 500.
 MaxQueueLen (integer): is the number of metrics keept internally.
 Default is 200000.
 
-Filter (array of string): filters collectors matching these terms.
+Filter (array of string): Only include collectors matching these terms. Prefix
+with - to invert match and exclude collectors matching those terms. Use
+*,-term,-anotherterm to include all collectors except excluded terms.
 
-MetricFilters (array of string): filters metrics matching these regular
-expressions.
+MetricFilters (array of string): only send metrics matching these regular
+expressions. Example ['^(win\.cpu|win\.system\..*)$', 'free']
 
 IfaceExpr (string): Replaces the default regular expression for interface name
 matching on Linux.
@@ -214,13 +217,14 @@ ProcessDotNet.
 HTTPUnit (array of table, keys are TOML, Hiera): httpunit TOML and Hiera
 files to read and monitor. See https://github.com/StackExchange/httpunit
 for documentation about the toml file. TOML and Hiera may both be specified,
-or just one.
+or just one. Freq is collector frequency as a duration string (default 5m).
 
 	[[HTTPUnit]]
 	  TOML = "/path/to/httpunit.toml"
 	  Hiera = "/path/to/listeners.json"
 	[[HTTPUnit]]
 	  TOML = "/some/other.toml"
+	  Freq = "30s"
 
 Riak (array of table, keys are URL): Riak hosts to poll.
 
@@ -293,6 +297,22 @@ will deletes it.
 	  [TagOverride.Tags]
 	    docker_name = ''
 	    source = 'kubelet'
+
+Oracles (array of table, keys are ClusterName, Instances): Oracle database
+instances to poll. The Instances key is an array of table with keys
+ConnectionString and Role, which are the same as using sqlplus.
+
+	[[Oracles]]
+	  ClusterName = "oracle rac name"
+	  [[Oracles.instances]]
+	    ConnectionString = "/"
+	    Role = "sysdba"
+	  [[Oracles.instances]]
+	    ConnectionString = "username/password@oraclehost/sid"
+	  [[Oracles.instances]]
+	    ConnectionString = "/@localnodevip/sid"
+	    Role = "sysdba"
+
 
 Windows
 

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"bosun.org/_version"
 	"bosun.org/cmd/scollector/collectors"
 	"bosun.org/cmd/scollector/conf"
 	"bosun.org/collect"
@@ -25,7 +26,6 @@ import (
 	"bosun.org/opentsdb"
 	"bosun.org/slog"
 	"bosun.org/util"
-	"bosun.org/version"
 	"github.com/BurntSushi/toml"
 )
 
@@ -100,6 +100,7 @@ func main() {
 	}
 	collectors.Init(conf)
 	for _, r := range conf.MetricFilters {
+		slog.Infof("Adding MetricFilter: %v\n", r)
 		check(collectors.AddMetricFilters(r))
 	}
 	for _, rmq := range conf.RabbitMQ {
@@ -124,11 +125,24 @@ func main() {
 		check(collectors.AddProcessDotNetConfig(p))
 	}
 	for _, h := range conf.HTTPUnit {
+		var freq time.Duration
+		var parseerr error
+		if h.Freq == "" {
+			freq = time.Minute * 5
+		} else {
+			freq, parseerr = time.ParseDuration(h.Freq)
+			if parseerr != nil {
+				slog.Fatal(parseerr)
+			}
+			if freq < time.Second {
+				slog.Fatalf("Invalid HTTPUnit frequency %s, cannot be less than 1 second.", h.Freq)
+			}
+		}
 		if h.TOML != "" {
-			check(collectors.HTTPUnitTOML(h.TOML))
+			check(collectors.HTTPUnitTOML(h.TOML, freq))
 		}
 		if h.Hiera != "" {
-			check(collectors.HTTPUnitHiera(h.Hiera))
+			check(collectors.HTTPUnitHiera(h.Hiera, freq))
 		}
 	}
 	for _, r := range conf.Riak {
@@ -226,14 +240,17 @@ func main() {
 		}
 		collect.MaxQueueLen = conf.MaxQueueLen
 	}
-
+	maxMemMegaBytes := uint64(500)
+	if conf.MaxMem != 0 {
+		maxMemMegaBytes = conf.MaxMem
+	}
 	go func() {
-		const maxMem = 500 * 1024 * 1024 // 500MB
+		maxMemBytes := maxMemMegaBytes * 1024 * 1024
 		var m runtime.MemStats
-		for range time.Tick(time.Minute) {
+		for range time.Tick(time.Second * 30) {
 			runtime.ReadMemStats(&m)
-			if m.Alloc > maxMem {
-				panic("memory max reached")
+			if m.Alloc > maxMemBytes {
+				panic(fmt.Sprintf("memory max reached: (current: %v bytes, max: %v bytes)", m.Alloc, maxMemBytes))
 			}
 		}
 	}()
