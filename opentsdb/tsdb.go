@@ -148,6 +148,32 @@ func (t TagSet) Subset(o TagSet) bool {
 	return true
 }
 
+// SubsetMatching returns if all k=v pairs in o are in t.
+// Supports multiple values split by | or *.
+func (t TagSet) SubsetMatching(o TagSet) bool {
+	if len(o) > len(t) {
+		return false
+	}
+	for k, v := range o {
+		vs := strings.Split(v, "|")
+
+		if v == "*" {
+			continue
+		}
+
+		match := false
+		for _, sv := range vs {
+			if tv, ok := t[k]; ok && tv == sv {
+				match = true
+			}
+		}
+		if !match {
+			return false
+		}
+	}
+	return true
+}
+
 // Compatible returns true if all keys that are in both o and t, have the same value.
 func (t TagSet) Compatible(o TagSet) bool {
 	for k, v := range o {

@@ -204,7 +204,7 @@ func (d *dataAccess) GetMetricTagValues(metric, tagk string, tags opentsdb.TagSe
 			if err != nil {
 				return nil, slog.Wrap(err)
 			}
-			if ts.Subset(tags) {
+			if ts.SubsetMatching(tags) {
 				if v, ok := ts[tagk]; ok {
 					result[v] = true
 				}
