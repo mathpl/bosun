@@ -165,7 +165,7 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 		incident.LastAbnormalStatus = event.Status
 		incident.LastAbnormalTime = event.Time.UTC().Unix()
 	}
-	if event.Status > incident.WorstStatus {
+	if event.Status != incident.CurrentStatus {
 		incident.WorstStatus = event.Status
 		shouldNotify = true
 	}
@@ -190,8 +190,8 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 	resolvedVarsLookup := s.ExecuteVarLookup(r, a, incident)
 
 	//render templates and open alert key if abnormal
+	s.executeTemplates(incident, event, a, r, resolvedVarsLookup, incident.AlertKey.Group(), event.Status)
 	if event.Status > models.StNormal {
-		s.executeTemplates(incident, event, a, r, resolvedVarsLookup, incident.AlertKey.Group(), event.Status)
 		incident.Open = true
 		if a.Log {
 			incident.Open = false
