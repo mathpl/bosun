@@ -52,7 +52,7 @@ type SearchDataAccess interface {
 
 	AddMetricTagSet(metric, tagSet string, time int64) error
 	GetMetricTagSets(metric string, tags opentsdb.TagSet) (map[string]int64, error)
-	GetMetricTagValues(metric, tagk string, tags opentsdb.TagSet) ([]string, error)
+	GetMetricTagValues(metric, tagk string, tags opentsdb.TagSet) (map[string]int64, error)
 
 	BackupLastInfos(map[string]map[string]*LastInfo) error
 	LoadLastInfos() (map[string]map[string]*LastInfo, error)
