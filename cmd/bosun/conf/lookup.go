@@ -32,7 +32,7 @@ func (lookup *ExprLookup) Get(key string, tag opentsdb.TagSet) (value string, ok
 			if !found && lookup.UnjoinedOK {
 				nbMatch++
 				unjoinedMatch++
-				break
+				continue
 			}
 			matches, err := search.Match(av, []string{tagv})
 			if err != nil {
