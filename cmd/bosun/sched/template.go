@@ -71,6 +71,14 @@ func (c *Context) Ack() string {
 	})
 }
 
+// Close returns the URL to close an alert.
+func (c *Context) Close() string {
+	return c.schedule.Conf.MakeLink("/action", &url.Values{
+		"type": []string{"close"},
+		"key":  []string{c.Alert.Name + c.AlertKey.Group().String()},
+	})
+}
+
 // Ack returns the URL to acknowledge an alert.
 func (c *Context) History() string {
 	return c.schedule.Conf.MakeLink("/history", &url.Values{
