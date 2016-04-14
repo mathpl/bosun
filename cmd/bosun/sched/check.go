@@ -189,14 +189,16 @@ func (s *Schedule) runHistory(r *RunHistory, ak models.AlertKey, event *models.E
 	// Get a copy of the alert's vars with lookup() resolved
 	resolvedVarsLookup := s.ExecuteVarLookup(r, a, incident)
 
-	//render templates and open alert key if abnormal
-	s.executeTemplates(incident, event, a, r, resolvedVarsLookup, incident.AlertKey.Group(), event.Status)
+	//open alert key if abnormal
 	if event.Status > models.StNormal {
 		incident.Open = true
 		if a.Log {
 			incident.Open = false
 		}
 	}
+
+	//render templates
+	s.executeTemplates(incident, event, a, r, resolvedVarsLookup, incident.AlertKey.Group(), event.Status)
 
 	// On state increase, clear old notifications and notify current.
 	// Do nothing if state did not change.

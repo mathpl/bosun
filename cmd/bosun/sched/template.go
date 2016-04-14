@@ -71,6 +71,13 @@ func (c *Context) Ack() string {
 	})
 }
 
+// Ack returns the URL to acknowledge an alert.
+func (c *Context) History() string {
+	return c.schedule.Conf.MakeLink("/history", &url.Values{
+		"key": []string{c.Alert.Name + c.AlertKey.Group().String()},
+	})
+}
+
 // HostView returns the URL to the host view page.
 func (c *Context) HostView(host string) string {
 	return c.schedule.Conf.MakeLink("/host", &url.Values{
