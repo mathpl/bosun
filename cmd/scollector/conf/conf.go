@@ -194,4 +194,5 @@ type TagOverride struct {
 	CollectorExpr string
 	MatchedTags   map[string]string
 	Tags          map[string]string
+	Replace       map[string][]string
 }
