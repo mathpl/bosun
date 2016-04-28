@@ -282,12 +282,13 @@ metrics.
 
 	LocalListener = "localhost:4242"
 
-TagOverride (array of tables, key are CollectorExpr, MatchedTags and Tags): if a collector
-name matches CollectorExpr MatchedTags and Tags will be merged to all outgoing message
-produced by the collector, in that order. MatchedTags will apply a regexp to the tag
-defined by the key name and add tags based on the named match groups defined in the
-regexp. After tags defined in Tags will be merged, defining a tag as empty string
-will deletes it.
+TagOverride (array of tables, key are CollectorExpr, MatchedTags, Tags and Replace): if a
+a collector name matches CollectorExpr MatchedTags and Tags will be merged to all outgoing
+message produced by the collector, in that order. MatchedTags will apply a regexp to the
+tag defined by the key name and add tags based on the named match groups defined in the
+regexp. After tags defined in Tags will be merged, defining a tag as empty string will
+deletes it. Finally you can modify the final value of the tag with Replace which calls
+regexp.ReplaceAllString on the tag value.
 
 	[[TagOverride]]
 	  CollectorExpr = 'cadvisor'
@@ -297,6 +298,9 @@ will deletes it.
 	  [TagOverride.Tags]
 	    docker_name = ''
 	    source = 'kubelet'
+
+	  [TagOverride.Replace]
+	    pod_name = [ '\.','_' ]
 
 Windows
 
