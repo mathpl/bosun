@@ -376,7 +376,6 @@ func blockDeviceLookup(major, minor uint64) string {
 	return string(content[startIdx : startIdx+endIdx])
 }
 
->>>>>>> cadvisor-cpu-stats-review
 func statsForContainer(md *opentsdb.MultiDataPoint, container *v1.ContainerInfo, perCpuUsage bool) {
 	stats := container.Stats[0]
 	var ts opentsdb.TagSet
