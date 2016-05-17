@@ -356,8 +356,6 @@ func (s *Search) FilteredTagValuesByMetricTagKey(metric, tagk string, tsf map[st
 	for v, ts := range results {
 		if t <= ts {
 			values = append(values, v)
-		} else {
-			fmt.Printf("%s > %s\n", t, ts)
 		}
 	}
 	return values, nil
