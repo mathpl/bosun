@@ -169,7 +169,13 @@ func (d *dataAccess) GetMetricTagSets(metric string, tags opentsdb.TagSet) (map[
 				return nil, slog.Wrap(err)
 			}
 			if ts.Subset(tags) {
-				result[mts] = t
+				if oldTs, found := result[mts]; found {
+					if oldTs < t {
+						result[mts] = t
+					}
+				} else {
+					result[mts] = t
+				}
 			}
 		}
 
