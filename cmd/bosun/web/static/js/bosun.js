@@ -118,22 +118,13 @@ bosunControllers.controller('BosunCtrl', ['$scope', '$route', '$http', '$q', '$r
             }
             return null;
         };
-        $http.get("/api/annotate")
-            .success(function (data) {
-            $scope.annotateEnabled = data;
-        })
-            .error(function (data) {
-            console.log(data);
-        });
-        $http.get("/api/opentsdb/version")
-            .success(function (data) {
-            $scope.version = data;
+        $scope.init = function (settings) {
+            $scope.saveEnabled = settings.SaveEnabled;
+            $scope.annotateEnabled = settings.AnnotateEnabled;
+            $scope.quiet = settings.Quiet;
+            $scope.version = settings.Version;
             $scope.opentsdbEnabled = $scope.version.Major != 0 && $scope.version.Minor != 0;
-        })
-            .error(function (data) {
-            console.log(data);
-        });
-        ;
+        };
         $scope.json = function (v) {
             return JSON.stringify(v, null, '  ');
         };
@@ -315,6 +306,29 @@ moment.locale('en', {
         yy: "%dy"
     }
 });
+function ruleUrl(ak, fromTime) {
+    var openBrack = ak.indexOf("{");
+    var closeBrack = ak.indexOf("}");
+    var alertName = ak.substr(0, openBrack);
+    var template = ak.substring(openBrack + 1, closeBrack);
+    var url = '/api/rule?' +
+        'alert=' + encodeURIComponent(alertName) +
+        '&from=' + encodeURIComponent(fromTime.format()) +
+        '&template_group=' + encodeURIComponent(template);
+    return url;
+}
+function configUrl(ak, fromTime) {
+    var openBrack = ak.indexOf("{");
+    var closeBrack = ak.indexOf("}");
+    var alertName = ak.substr(0, openBrack);
+    var template = ak.substring(openBrack + 1, closeBrack);
+    // http://bosun/config?alert=haproxy.server.downtime.ny&fromDate=2016-07-10&fromTime=21%3A03
+    var url = '/config?' +
+        'alert=' + encodeURIComponent(alertName) +
+        '&fromDate=' + encodeURIComponent(fromTime.format("YYYY-MM-DD")) +
+        '&fromTime=' + encodeURIComponent(fromTime.format("HH:mm"));
+    return url;
+}
 function createCookie(name, value, days) {
     var expires;
     if (days) {
@@ -468,29 +482,41 @@ bosunControllers.controller('AnnotationCtrl', ['$scope', '$http', '$location', '
             .success(function (data) {
             $scope.hosts = data;
         });
-        $scope.submitAnnotation = function () { return $http.post('/api/annotation', $scope.annotation)
-            .success(function (data) {
-            $scope.annotation = new Annotation(data, true);
-            $scope.error = "";
-            $scope.submitSuccess = true;
-            $scope.deleteSuccess = false;
-        })
-            .error(function (error) {
-            $scope.error = error;
-            $scope.submitSuccess = false;
-        }); };
-        $scope.deleteAnnotation = function () { return $http.delete('/api/annotation/' + $scope.annotation.Id)
-            .success(function (data) {
-            $scope.error = "";
-            $scope.deleteSuccess = true;
-            $scope.submitSuccess = false;
-            $scope.annotation = new (Annotation);
-            $scope.annotation.setTimeUTC();
-        })
-            .error(function (error) {
-            $scope.error = "failed to delete annotation with id: " + $scope.annotation.Id + ", error: " + error;
-            $scope.deleteSuccess = false;
-        }); };
+        $scope.submitAnnotation = function () {
+            $scope.animate();
+            $http.post('/api/annotation', $scope.annotation)
+                .success(function (data) {
+                $scope.annotation = new Annotation(data, true);
+                $scope.error = "";
+                $scope.submitSuccess = true;
+                $scope.deleteSuccess = false;
+            })
+                .error(function (error) {
+                $scope.error = "failed to create annotation: " + error.error;
+                $scope.submitSuccess = false;
+            })
+                .finally(function () {
+                $scope.stop();
+            });
+        };
+        $scope.deleteAnnotation = function () {
+            $scope.animate();
+            $http.delete('/api/annotation/' + $scope.annotation.Id)
+                .success(function (data) {
+                $scope.error = "";
+                $scope.deleteSuccess = true;
+                $scope.submitSuccess = false;
+                $scope.annotation = new (Annotation);
+                $scope.annotation.setTimeUTC();
+            })
+                .error(function (error) {
+                $scope.error = "failed to delete annotation with id: " + $scope.annotation.Id + ", error: " + error.error;
+                $scope.deleteSuccess = false;
+            })
+                .finally(function () {
+                $scope.stop();
+            });
+        };
     }]);
 bosunControllers.controller('ConfigCtrl', ['$scope', '$http', '$location', '$route', '$timeout', '$sce', function ($scope, $http, $location, $route, $timeout, $sce) {
         var search = $location.search();
@@ -500,6 +526,8 @@ bosunControllers.controller('ConfigCtrl', ['$scope', '$http', '$location', '$rou
         $scope.toTime = search.toTime || '';
         $scope.intervals = +search.intervals || 5;
         $scope.duration = +search.duration || null;
+        $scope.runningHash = search.runningHash || null;
+        $scope.runningChanged = search.runningChanged || false;
         $scope.config_text = 'Loading config...';
         $scope.selected_alert = search.alert || '';
         $scope.email = search.email || '';
@@ -508,6 +536,9 @@ bosunControllers.controller('ConfigCtrl', ['$scope', '$http', '$location', '$rou
         $scope.tab = search.tab || 'results';
         $scope.aceTheme = 'chrome';
         $scope.aceMode = 'bosun';
+        $scope.user = readCookie("action-user");
+        $scope.expandDiff = false;
+        $scope.runningChangedHelp = "The running config has been changed. This means you are in danger of overwriting someone else's changes. To view the changes open the 'Save Dialogue' and you will see a unified diff. The only way to get rid of the error panel is to open a new instance of the rule editor and copy your changes into it. You are still permitted to save without doing this, but then you must be very careful not to overwrite anyone else's changes.";
         var expr = search.expr;
         function buildAlertFromExpr() {
             if (!expr)
@@ -645,6 +676,30 @@ bosunControllers.controller('ConfigCtrl', ['$scope', '$http', '$location', '$rou
                 delete (set.show);
             });
         };
+        $scope.getRunningHash = function () {
+            if (!$scope.saveEnabled) {
+                return;
+            }
+            (function tick() {
+                $http.get('/api/config/running_hash')
+                    .success(function (data) {
+                    $scope.runningHashResult = '';
+                    $timeout(tick, 15 * 1000);
+                    if ($scope.runningHash) {
+                        if (data.Hash != $scope.runningHash) {
+                            $scope.runningChanged = true;
+                            return;
+                        }
+                    }
+                    $scope.runningHash = data.Hash;
+                    $scope.runningChanged = false;
+                })
+                    .error(function (data) {
+                    $scope.runningHashResult = "Error getting running config hash: " + data;
+                });
+            })();
+        };
+        $scope.getRunningHash();
         $scope.setInterval = function () {
             var from = moment.utc($scope.fromDate + ' ' + $scope.fromTime);
             var to = moment.utc($scope.toDate + ' ' + $scope.toTime);
@@ -754,6 +809,8 @@ bosunControllers.controller('ConfigCtrl', ['$scope', '$http', '$location', '$rou
             $location.search('duration', String($scope.duration) || null);
             $location.search('email', $scope.email || null);
             $location.search('template_group', $scope.template_group || null);
+            $location.search('runningHash', $scope.runningHash);
+            $location.search('runningChanged', $scope.runningChanged);
             $scope.animate();
             var from = moment.utc($scope.fromDate + ' ' + $scope.fromTime);
             var to = moment.utc($scope.toDate + ' ' + $scope.toTime);
@@ -841,6 +898,49 @@ bosunControllers.controller('ConfigCtrl', ['$scope', '$http', '$location', '$rou
         $scope.downloadConfig = function () {
             var blob = new Blob([$scope.config_text], { type: "text/plain;charset=utf-8" });
             saveAs(blob, "bosun.conf");
+        };
+        $scope.diffConfig = function () {
+            $http.post('/api/config/diff', {
+                "Config": $scope.config_text,
+                "User": $scope.user,
+                "Message": $scope.message
+            })
+                .success(function (data) {
+                createCookie("action-user", $scope.user, 1000);
+                $scope.diff = data || "No Diff";
+                // Reset running hash if there is no difference?
+            })
+                .error(function (error) {
+                $scope.diff = "Failed to load diff: " + error;
+            });
+        };
+        $scope.saveConfig = function () {
+            if (!$scope.saveEnabled) {
+                return;
+            }
+            $scope.saveResult = "Saving; Please Wait";
+            $http.post('/api/config/save', {
+                "Config": $scope.config_text,
+                "Diff": $scope.diff,
+                "User": $scope.user,
+                "Message": $scope.message
+            })
+                .success(function (data) {
+                $scope.saveResult = "Config Saved; Reloading";
+                $scope.runningHash = undefined;
+            })
+                .error(function (error) {
+                $scope.saveResult = error;
+            });
+        };
+        $scope.saveClass = function () {
+            if ($scope.saveResult == "Saving; Please Wait") {
+                return "alert-warning";
+            }
+            if ($scope.saveResult == "Config Saved; Reloading") {
+                return "alert-success";
+            }
+            return "alert-danger";
         };
         return $scope;
     }]);
@@ -932,6 +1032,35 @@ bosunApp.directive("tsTime", function () {
             scope.$watch(attrs.tsTime, function (v) {
                 var m = moment(v).utc();
                 var text = fmtTime(v);
+                if (attrs.tsEndTime) {
+                    var diff = moment(scope.$eval(attrs.tsEndTime)).diff(m);
+                    var duration = fmtDuration(diff);
+                    text += " for " + duration;
+                }
+                if (attrs.noLink) {
+                    elem.text(text);
+                }
+                else {
+                    var el = document.createElement('a');
+                    el.text = text;
+                    el.href = 'http://www.timeanddate.com/worldclock/converted.html?iso=';
+                    el.href += m.format('YYYYMMDDTHHmm');
+                    el.href += '&p1=0';
+                    angular.forEach(scope.timeanddate, function (v, k) {
+                        el.href += '&p' + (k + 2) + '=' + v;
+                    });
+                    elem.html(el);
+                }
+            });
+        }
+    };
+});
+bosunApp.directive("tsTimeUnix", function () {
+    return {
+        link: function (scope, elem, attrs) {
+            scope.$watch(attrs.tsTimeUnix, function (v) {
+                var m = moment(v * 1000).utc();
+                var text = fmtTime(m);
                 if (attrs.tsEndTime) {
                     var diff = moment(scope.$eval(attrs.tsEndTime)).diff(m);
                     var duration = fmtDuration(diff);
@@ -2084,6 +2213,17 @@ var Query = (function () {
                 f.tagk = k;
                 that.gbFilters[k] = f;
             });
+            // Load filters from raw query and turn them into gb and nGbFilters.
+            // This makes links from other pages work (i.e. the expr page)
+            if (_.has(q, 'filters')) {
+                _.each(q.filters, function (filter) {
+                    if (filter.groupBy) {
+                        that.gbFilters[filter.tagk] = filter;
+                        return;
+                    }
+                    that.nGbFilters[filter.tagk] = filter;
+                });
+            }
         }
         this.setFilters();
         this.setDs();
@@ -2273,6 +2413,7 @@ bosunControllers.controller('GraphCtrl', ['$scope', '$http', '$location', '$rout
         $scope.setIndex = function (i) {
             $scope.index = i;
         };
+        var alphabet = "abcdefghijklmnopqrstuvwxyz".split("");
         if ($scope.annotateEnabled) {
             $http.get('/api/annotation/values/Owner')
                 .success(function (data) {
@@ -2362,7 +2503,7 @@ bosunControllers.controller('GraphCtrl', ['$scope', '$http', '$location', '$rout
         if ($scope.query_p.length == 0) {
             $scope.AddTab();
         }
-        $http.get('/api/metric')
+        $http.get('/api/metric' + "?since=" + moment().utc().subtract(2, "days").unix())
             .success(function (data) {
             $scope.metrics = data;
         })
@@ -2418,12 +2559,13 @@ bosunControllers.controller('GraphCtrl', ['$scope', '$http', '$location', '$rout
                     delete r.queries[index].tags[tag];
                 });
                 if ($scope.filterSupport) {
-                    _.each(r.queries[index].nGbFilters, function (v, fKey) {
-                        if (m[fKey]) {
+                    _.each(r.queries[index].filters, function (f) {
+                        if (m[f.tagk]) {
                             return;
                         }
-                        delete r.queries[index].nGbFilters[fKey];
-                        delete r.queries[index].gbFilters[fKey];
+                        delete r.queries[index].nGbFilters[f.tagk];
+                        delete r.queries[index].gbFilters[f.tagk];
+                        r.queries[index].filters = _.without(r.queries[index].filters, _.findWhere(r.queries[index].filters, { tagk: f.tagk }));
                     });
                 }
             });
@@ -2496,13 +2638,21 @@ bosunControllers.controller('GraphCtrl', ['$scope', '$http', '$location', '$rout
                 if ($scope.annotateEnabled) {
                     $scope.annotations = _.sortBy(data.Annotations, function (d) { return d.StartDate; });
                 }
+                $scope.warning = '';
                 if (!$scope.result) {
                     $scope.warning = 'No Results';
                 }
-                else {
-                    $scope.warning = '';
+                if (data.Warnings.length > 0) {
+                    $scope.warning += data.Warnings.join(" ");
                 }
                 $scope.queries = data.Queries;
+                $scope.exprText = "";
+                _.each($scope.queries, function (q, i) {
+                    $scope.exprText += "$" + alphabet[i] + " = " + q + "\n";
+                    if (i == $scope.queries.length - 1) {
+                        $scope.exprText += "avg($" + alphabet[i] + ")";
+                    }
+                });
                 $scope.running = '';
                 $scope.error = '';
                 var u = $location.absUrl();
@@ -2741,18 +2891,71 @@ bosunControllers.controller('HostCtrl', ['$scope', '$http', '$location', '$route
             $scope.fsdata = tmp;
         });
     }]);
-bosunControllers.controller('IncidentCtrl', ['$scope', '$http', '$location', '$route', function ($scope, $http, $location, $route) {
+bosunControllers.controller('IncidentCtrl', ['$scope', '$http', '$location', '$route', '$sce', function ($scope, $http, $location, $route, $sce) {
         var search = $location.search();
         var id = search.id;
         if (!id) {
             $scope.error = "must supply incident id as query parameter";
             return;
         }
+        $http.get('/api/config')
+            .success(function (data) {
+            $scope.config_text = data;
+        });
+        $scope.action = function (type) {
+            var key = encodeURIComponent($scope.state.AlertKey);
+            return '/action?type=' + type + '&key=' + key;
+        };
+        $scope.loadTimelinePanel = function (v, i) {
+            if (v.doneLoading && !v.error) {
+                return;
+            }
+            v.error = null;
+            v.doneLoading = false;
+            if (i == $scope.lastNonUnknownAbnormalIdx) {
+                v.subject = $scope.incident.Subject;
+                v.body = $scope.body;
+                v.doneLoading = true;
+                return;
+            }
+            var ak = $scope.incident.AlertKey;
+            var url = ruleUrl(ak, moment(v.Time));
+            $http.post(url, $scope.config_text)
+                .success(function (data) {
+                v.subject = data.Subject;
+                v.body = $sce.trustAsHtml(data.Body);
+            })
+                .error(function (error) {
+                v.error = error;
+            })
+                .finally(function () {
+                v.doneLoading = true;
+            });
+        };
+        $scope.shown = {};
+        $scope.collapse = function (i, v) {
+            $scope.shown[i] = !$scope.shown[i];
+            if ($scope.loadTimelinePanel && $scope.shown[i]) {
+                $scope.loadTimelinePanel(v, i);
+            }
+        };
         $http.get('/api/incidents/events?id=' + id)
             .success(function (data) {
             $scope.incident = data;
+            $scope.state = $scope.incident;
             $scope.actions = data.Actions;
-            $scope.events = data.Events;
+            $scope.body = $sce.trustAsHtml(data.Body);
+            $scope.events = data.Events.reverse();
+            $scope.configLink = configUrl($scope.incident.AlertKey, moment.unix($scope.incident.LastAbnormalTime * 1000));
+            for (var i = 0; i < $scope.events.length; i++) {
+                var e = $scope.events[i];
+                if (e.Status != 'normal' && e.Status != 'unknown') {
+                    $scope.lastNonUnknownAbnormalIdx = i;
+                    $scope.collapse(i, e); // Expand the panel of the current body
+                    break;
+                }
+            }
+            $scope.collapse;
         })
             .error(function (err) {
             $scope.error = err;
@@ -3143,7 +3346,7 @@ bosunApp.directive('tsState', ['$sce', '$http', function ($sce, $http) {
                 });
                 scope.state.last = scope.state.Events[scope.state.Events.length - 1];
                 if (scope.state.Actions && scope.state.Actions.length > 0) {
-                    scope.state.LastAction = scope.state.Actions[0];
+                    scope.state.LastAction = scope.state.Actions[scope.state.Actions.length - 1];
                 }
                 scope.state.RuleUrl = '/config?' +
                     'alert=' + encodeURIComponent(scope.state.Alert) +
@@ -3160,6 +3363,12 @@ bosunApp.directive('tsState', ['$sce', '$http', function ($sce, $http) {
             }
         };
     }]);
+bosunApp.directive('tsNote', function () {
+    return {
+        restrict: 'E',
+        templateUrl: '/partials/note.html'
+    };
+});
 bosunApp.directive('tsAck', function () {
     return {
         restrict: 'E',

@@ -26,33 +26,39 @@ import (
 type State struct {
 	*Expr
 	now                time.Time
-	cache              *cache.Cache
 	enableComputations bool
+	unjoinedOk         bool
+	autods             int
+	vValue             float64
 
-	// OpenTSDB
-	Search      *search.Search
-	autods      int
-	tsdbContext opentsdb.Context
-	tsdbQueries []opentsdb.Request
-	unjoinedOk  bool
-	squelched   func(tags opentsdb.TagSet) bool
+	*Backends
+
+	// Bosun Internal
+	*BosunProviders
 
 	// Graphite
 	graphiteQueries []graphite.Request
-	graphiteContext graphite.Context
-
 	// LogstashElastic (for pre ES v2)
 	logstashQueries []elasticOld.SearchSource
-	logstashHosts   LogstashElasticHosts
-
 	// Elastic (for post ES v2)
 	elasticQueries []elastic.SearchSource
-	elasticHosts   ElasticHosts
+	// OpenTSDB
+	tsdbQueries []opentsdb.Request
+}
 
-	// InfluxDB
-	InfluxConfig client.Config
+type Backends struct {
+	TSDBContext     opentsdb.Context
+	GraphiteContext graphite.Context
+	LogstashHosts   LogstashElasticHosts
+	ElasticHosts    ElasticHosts
+	InfluxConfig    client.Config
+}
 
-	History AlertStatusProvider
+type BosunProviders struct {
+	Squelched func(tags opentsdb.TagSet) bool
+	Search    *search.Search
+	History   AlertStatusProvider
+	Cache     *cache.Cache
 }
 
 // Alert Status Provider is used to provide information about alert results.
@@ -71,6 +77,7 @@ func (e *Expr) MarshalJSON() ([]byte, error) {
 	return json.Marshal(e.String())
 }
 
+// New creates a new expression tree
 func New(expr string, funcs ...map[string]parse.Func) (*Expr, error) {
 	funcs = append(funcs, builtins)
 	t, err := parse.Parse(expr, funcs...)
@@ -85,26 +92,19 @@ func New(expr string, funcs ...map[string]parse.Func) (*Expr, error) {
 
 // Execute applies a parse expression to the specified OpenTSDB context, and
 // returns one result per group. T may be nil to ignore timings.
-func (e *Expr) Execute(c opentsdb.Context, g graphite.Context, l LogstashElasticHosts, eh ElasticHosts, influxConfig client.Config, cache *cache.Cache, T miniprofiler.Timer, now time.Time, autods int, unjoinedOk bool, search *search.Search, squelched func(tags opentsdb.TagSet) bool, history AlertStatusProvider) (r *Results, queries []opentsdb.Request, err error) {
-	if squelched == nil {
-		squelched = func(tags opentsdb.TagSet) bool {
+func (e *Expr) Execute(backends *Backends, providers *BosunProviders, T miniprofiler.Timer, now time.Time, autods int, unjoinedOk bool) (r *Results, queries []opentsdb.Request, err error) {
+	if providers.Squelched == nil {
+		providers.Squelched = func(tags opentsdb.TagSet) bool {
 			return false
 		}
 	}
 	s := &State{
-		Expr:            e,
-		cache:           cache,
-		tsdbContext:     c,
-		graphiteContext: g,
-		logstashHosts:   l,
-		elasticHosts:    eh,
-		InfluxConfig:    influxConfig,
-		now:             now,
-		autods:          autods,
-		unjoinedOk:      unjoinedOk,
-		Search:          search,
-		squelched:       squelched,
-		History:         history,
+		Expr:           e,
+		now:            now,
+		autods:         autods,
+		unjoinedOk:     unjoinedOk,
+		Backends:       backends,
+		BosunProviders: providers,
 	}
 	return e.ExecuteState(s, T)
 }
@@ -128,13 +128,14 @@ func (e *Expr) ExecuteState(s *State, T miniprofiler.Timer) (r *Results, queries
 func errRecover(errp *error) {
 	e := recover()
 	if e != nil {
-		slog.Infof("%s: %s", e, debug.Stack())
 		switch err := e.(type) {
 		case runtime.Error:
+			slog.Infof("%s: %s", e, debug.Stack())
 			panic(e)
 		case error:
 			*errp = err
 		default:
+			slog.Infof("%s: %s", e, debug.Stack())
 			panic(e)
 		}
 	}
@@ -168,6 +169,18 @@ func (s Scalar) Type() models.FuncType        { return models.TypeScalar }
 func (s Scalar) Value() interface{}           { return s }
 func (s Scalar) MarshalJSON() ([]byte, error) { return marshalFloat(float64(s)) }
 
+type String string
+
+func (s String) Type() models.FuncType { return models.TypeString }
+func (s String) Value() interface{}    { return s }
+
+type NumberExpr Expr
+
+func (s NumberExpr) Type() models.FuncType { return models.TypeNumberExpr }
+func (s NumberExpr) Value() interface{}    { return s }
+
+//func (s String) MarshalJSON() ([]byte, error) { return json.Marshal(s) }
+
 // Series is the standard form within bosun to represent timeseries data.
 type Series map[time.Time]float64
 
@@ -180,6 +193,10 @@ func (s Series) MarshalJSON() ([]byte, error) {
 		r[fmt.Sprint(k.Unix())] = Scalar(v)
 	}
 	return json.Marshal(r)
+}
+
+func (a Series) Equal(b Series) bool {
+	return reflect.DeepEqual(a, b)
 }
 
 type ESQuery struct {
@@ -244,6 +261,52 @@ type Results struct {
 	IgnoreOtherUnjoined bool
 	// If non nil, will set any NaN value to it.
 	NaNValue *float64
+}
+
+// Equal inspects if two results have the same content
+// error will return why they are not equal if they
+// are not equal
+func (a *Results) Equal(b *Results) (bool, error) {
+	if len(a.Results) != len(b.Results) {
+		return false, fmt.Errorf("unequal number of results: length a: %v, length b: %v", len(a.Results), len(b.Results))
+	}
+	if a.IgnoreUnjoined != b.IgnoreUnjoined {
+		return false, fmt.Errorf("ignoreUnjoined flag does not match a: %v, b: %v", a.IgnoreUnjoined, b.IgnoreUnjoined)
+	}
+	if a.IgnoreOtherUnjoined != b.IgnoreOtherUnjoined {
+		return false, fmt.Errorf("ignoreUnjoined flag does not match a: %v, b: %v", a.IgnoreOtherUnjoined, b.IgnoreOtherUnjoined)
+	}
+	if a.NaNValue != a.NaNValue {
+		return false, fmt.Errorf("NaNValue does not match a: %v, b: %v", a.NaNValue, b.NaNValue)
+	}
+	sortedA := ResultSliceByGroup(a.Results)
+	sort.Sort(sortedA)
+	sortedB := ResultSliceByGroup(b.Results)
+	sort.Sort(sortedB)
+	for i, result := range sortedA {
+		for ic, computation := range result.Computations {
+			if computation != sortedB[i].Computations[ic] {
+				return false, fmt.Errorf("mismatched computation a: %v, b: %v", computation, sortedB[ic])
+			}
+		}
+		if !result.Group.Equal(sortedB[i].Group) {
+			return false, fmt.Errorf("mismatched groups a: %v, b: %v", result.Group, sortedB[i].Group)
+		}
+		switch t := result.Value.(type) {
+		case Number, Scalar, String:
+			if result.Value != sortedB[i].Value {
+				return false, fmt.Errorf("values do not match a: %v, b: %v", result.Value, sortedB[i].Value)
+			}
+		case Series:
+			if !t.Equal(sortedB[i].Value.(Series)) {
+				return false, fmt.Errorf("mismatched series in result (Group: %s) a: %v, b: %v", result.Group, t, sortedB[i].Value.(Series))
+			}
+		default:
+			panic(fmt.Sprintf("can't compare results with type %T", t))
+		}
+
+	}
+	return true, nil
 }
 
 type ResultSlice []*Result
@@ -404,10 +467,22 @@ func (e *State) walk(node parse.Node, T miniprofiler.Timer) *Results {
 		res = e.walkUnary(node, T)
 	case *parse.FuncNode:
 		res = e.walkFunc(node, T)
+	case *parse.ExprNode:
+		res = e.walkExpr(node, T)
 	default:
 		panic(fmt.Errorf("expr: unknown node type"))
 	}
 	return res
+}
+
+func (e *State) walkExpr(node *parse.ExprNode, T miniprofiler.Timer) *Results {
+	return &Results{
+		Results: ResultSlice{
+			&Result{
+				Value: NumberExpr{node.Tree},
+			},
+		},
+	}
 }
 
 func (e *State) walkBinary(node *parse.BinaryNode, T miniprofiler.Timer) *Results {
@@ -473,6 +548,14 @@ func (e *State) walkBinary(node *parse.BinaryNode, T miniprofiler.Timer) *Result
 						s[k] = operate(node.OpStr, float64(v), bv)
 					}
 					value = s
+				case Series:
+					s := make(Series)
+					for k, av := range at {
+						if bv, ok := bt[k]; ok {
+							s[k] = operate(node.OpStr, av, bv)
+						}
+					}
+					value = s
 				default:
 					panic(ErrUnknownOp)
 				}
@@ -510,6 +593,8 @@ func operate(op string, a, b float64) (r float64) {
 		r = a - b
 	case "/":
 		r = a / b
+	case "**":
+		r = math.Pow(a, b)
 	case "%":
 		r = math.Mod(a, b)
 	case "==":
@@ -626,10 +711,21 @@ func (e *State) walkFunc(node *parse.FuncNode, T miniprofiler.Timer) *Results {
 				v = extract(e.walkUnary(t, T))
 			case *parse.BinaryNode:
 				v = extract(e.walkBinary(t, T))
+			case *parse.ExprNode:
+				v = e.walkExpr(t, T)
 			default:
 				panic(fmt.Errorf("expr: unknown func arg type"))
 			}
-			if f, ok := v.(float64); ok && node.F.Args[i] == models.TypeNumberSet {
+			var argType models.FuncType
+			if i >= len(node.F.Args) {
+				if !node.F.VArgs {
+					panic("expr: shouldn't be here, more args then expected and not variable argument type func")
+				}
+				argType = node.F.Args[node.F.VArgsPos]
+			} else {
+				argType = node.F.Args[i]
+			}
+			if f, ok := v.(float64); ok && argType == models.TypeNumberSet {
 				v = fromScalar(f)
 			}
 			in = append(in, reflect.ValueOf(v))
@@ -661,6 +757,12 @@ func extract(res *Results) interface{} {
 		return res.Results[0].Value.Value()
 	}
 	if len(res.Results) == 1 && res.Results[0].Type() == models.TypeESIndexer {
+		return res.Results[0].Value.Value()
+	}
+	if len(res.Results) == 1 && res.Results[0].Type() == models.TypeString {
+		return string(res.Results[0].Value.Value().(String))
+	}
+	if len(res.Results) == 1 && res.Results[0].Type() == models.TypeNumberExpr {
 		return res.Results[0].Value.Value()
 	}
 	return res

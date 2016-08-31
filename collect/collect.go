@@ -44,8 +44,17 @@ var (
 	// Tags is an opentsdb.TagSet used when sending self metrics.
 	Tags opentsdb.TagSet
 
+	// Whether or not to use NTLM authentication
+	UseNtlm bool = false
+
+	// DefaultClient can be used to override the HTTP client that will be used to make requests.
+	DefaultClient *http.Client = http.DefaultClient
+
 	// Dropped is the number of dropped data points due to a full queue.
 	dropped int64
+
+	// Dropped is the number of discarded data points due to being invalid
+	discarded int64
 
 	// Sent is the number of sent data points.
 	sent int64
@@ -60,14 +69,11 @@ var (
 	sets                = make(map[string]*setMetric)
 	puts                = make(map[string]*putMetric)
 	aggs                = make(map[string]*agMetric)
-	client              = &http.Client{
-		Transport: &timeoutTransport{Transport: new(http.Transport)},
-		Timeout:   time.Minute,
-	}
 )
 
 const (
 	descCollectAlloc             = "Total number of bytes allocated and still in use by the runtime (via runtime.ReadMemStats)."
+	descCollectDiscarded         = "Counter of discarded data points due to being invalid."
 	descCollectDropped           = "Counter of dropped data points due to the queue being full."
 	descCollectGoRoutines        = "Total number of goroutines that currently exist (via runtime.NumGoroutine)."
 	descCollectGcCpuFraction     = "fraction of CPU time used by GC"
@@ -83,19 +89,6 @@ const (
 	descCollectQueued            = "Total number of items currently queued and waiting to be sent to the server."
 	descCollectSent              = "Counter of data points sent to the server."
 )
-
-type timeoutTransport struct {
-	*http.Transport
-	Timeout time.Time
-}
-
-func (t *timeoutTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if time.Now().After(t.Timeout) {
-		t.Transport.CloseIdleConnections()
-		t.Timeout = time.Now().Add(time.Minute * 5)
-	}
-	return t.Transport.RoundTrip(r)
-}
 
 // InitChan is similar to Init, but uses the given channel instead of creating a
 // new one.
@@ -128,6 +121,13 @@ func InitChan(tsdbhost *url.URL, root string, ch chan *opentsdb.DataPoint) error
 		slock.Unlock()
 		return
 	})
+	Set("collect.discarded", Tags, func() (i interface{}) {
+		slock.Lock()
+		i = discarded
+		slock.Unlock()
+		return
+	})
+
 	Set("collect.sent", Tags, func() (i interface{}) {
 		slock.Lock()
 		i = sent
@@ -173,6 +173,7 @@ func InitChan(tsdbhost *url.URL, root string, ch chan *opentsdb.DataPoint) error
 	metadata.AddMetricMeta(metricRoot+"collect.queued", metadata.Gauge, metadata.Item, descCollectQueued)
 	metadata.AddMetricMeta(metricRoot+"collect.sent", metadata.Counter, metadata.PerSecond, descCollectSent)
 	metadata.AddMetricMeta(metricRoot+"collect.dropped", metadata.Counter, metadata.PerSecond, descCollectDropped)
+	metadata.AddMetricMeta(metricRoot+"collect.discarded", metadata.Counter, metadata.PerSecond, descCollectDiscarded)
 	// Make sure these get zeroed out instead of going unknown on restart
 	Add("collect.post.error", Tags, 0)
 	Add("collect.post.bad_status", Tags, 0)

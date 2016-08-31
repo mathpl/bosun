@@ -103,6 +103,11 @@ Default is 500.
 MaxQueueLen (integer): is the number of metrics keept internally.
 Default is 200000.
 
+UserAgentMessage (string): is an optional message that will be appended to the
+User Agent when making HTTP requests. This can be used to add contact details
+so external services are aware of who is making the requests.
+Example: Scollector/0.6.0 (UserAgentMessage added here)
+
 Filter (array of string): Only include collectors matching these terms. Prefix
 with - to invert match and exclude collectors matching those terms. Use
 *,-term,-anotherterm to include all collectors except excluded terms.
@@ -199,13 +204,36 @@ Vsphere (array of table, keys are Host, User, Password): vSphere hosts to poll.
 	  User = "vuser"
 	  Password = "pass"
 
-AWS (array of table, keys are AccessKey, SecretKey, Region): AWS hosts to poll.
+AWS (array of table, keys are AccessKey, SecretKey, Region, BillingProductCodesRegex,
+BillingBucketName, BillingBucketPath, BillingPurgeDays): AWS hosts to poll, and associated
+billing information.
+
+To report AWS billing information to OpenTSDB or Bosun, you need to configure AWS to
+generate billing reports, which will be put into an S3 bucket. See for more detail:
+http://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/detailed-billing-reports.html
+
+Once the reports are going into the S3, bucket, the Bucket Name and the Prefix Path that
+you entered during the report setup need to be entered below. Do not enter a blank bucket
+path as this is not supported.
+
+Reports that are over a certain number of days old are purged by scollector. Set the key
+BillingPurgeDays to 0 to disable purging of old reports (not that this may increase your S3
+usage costs as all reports are processed each time the collector runs).
+
+Do not populate the Billing keys if you do not wish to load billing data into OpenTSDB or
+Bosun.
+
+Only products whose name matches the BillingProductCodesRegex key will have their billing
+data sent to OpenTSDB or Bosun.
 
 	[[AWS]]
 	  AccessKey = "aoesnuth"
 	  SecretKey = "snch0d"
 	  Region = "somewhere"
-
+	  BillingProductCodesRegex = "^Amazon(S3|Glacier|Route53)$"
+	  BillingBucketName = "mybucket.billing"
+	  BillingBucketPath = "reports"
+	  BillingPurgeDays = 2
 
 Process: processes to monitor.
 
@@ -241,10 +269,13 @@ management plugin on http://guest:guest@127.0.0.1:15672/ .
 Cadvisor: Cadvisor endpoints to poll.
 Cadvisor collects system statistics about running containers.
 See https://github.com/google/cadvisor/ for documentation about configuring
-cadvisor.
+cadvisor. You can enable per cpu usage metric reporting optionally, and
+optionally use IsRemote to disable block device lookups.
 
 	[[Cadvisor]]
 		URL = "http://localhost:8080"
+		PerCpuUsage = true
+		IsRemote = false
 
 RedisCounters: Reads a hash of metric/counters from a redis database.
 
@@ -270,11 +301,44 @@ accounts for less than 10% of the traffic, it will be dropped. This is OK if you
 heavilly dominated by asmall set of protocols, but if you have a fairly even spread of protocols
 then this filtering loses its usefulness.
 
+AdditionalMetrics is formatted as such: [object_type].[object_id].[metric_category].[metric_spec_name]
+
+    - object_type:  is one of: "network", "device", "application", "vlan", "device_group", "activity_group"
+    - object_id:    can be found by querying the ExtraHop API (through the API Explorer) under the endpoint
+                    for the object type. For example, for "application", you would query the "/applications/"
+                    endpoint and locate the ID of the application you want to query.
+    - metric_category:  can be found in the Metric Catalogue for the metric you are wanting to query. e.g. for
+                        custom metrics, this is always "custom_detail"
+    - metric_spec_name: can be found in the Metric Catalogue for the metric you are wanting to query. e.g. for
+                        custom metrics, this is name you have specified in metricAddDetailCount() function in
+                        a trigger.
+
+For these additional metrics, it is expected that the key for the metric is in a keyvalue, comma seperated pair.
+This key will be converted into an OpenTSDB tagset. For example, if you have a key of
+"client=192.168.0.1,server=192.168.0.9,port=21441", this will be converted into an OpenTSDB tagset of the same
+values.
+
+CAUTION: Do not include unbounded values in your key if you can help it. Putting in something like client IP, or
+source/destination port, which are out of your control and specified by people external to your network, could
+end up putting millions of different keys into your Bosun instance - something you probably don't want.
+
+CertificateSubjectMatch and CertificateActivityGroup are used for collecting SSL information from ExtraHop. The
+key CertificateSubjectMatch is used to match against the certificate subject. If there is no match, we discard
+the certificate record. This is important as certificate subjects are essentially unbound, as EH return all
+certificates it sees, regardless of where they originated.
+
+The key CertificateActivityGroup is the Activity Group you want to pass through to ExtraHop to pull the certificates
+from. There is a group called "SSL Servers" which is most likely the group you want to use. You will need to discover
+the group number for this group and put it in here.
+
 	[[ExtraHop]]
 	  Host = "extrahop01"
 	  APIkey = "abcdef1234567890"
 	  FilterBy = "toppercent"
 	  FilterPercent = 75
+    AdditionalMetrics = [ "application.12.custom_detail.my trigger metric" ]
+		CertificateSubjectMatch = "example.(com|org|net)"
+		CertificateActivityGroup = 46
 
 LocalListener (string): local_listener will listen for HTTP request and forward
 the request to the configured OpenTSDB host while adding defined tags to
@@ -298,9 +362,25 @@ regexp.ReplaceAllString on the tag value.
 	  [TagOverride.Tags]
 	    docker_name = ''
 	    source = 'kubelet'
-
 	  [TagOverride.Replace]
 	    pod_name = [ '\.','_' ]
+
+Oracles (array of table, keys are ClusterName, Instances): Oracle database
+instances to poll. The Instances key is an array of table with keys
+ConnectionString and Role, which are the same as using sqlplus.
+
+	[[Oracles]]
+	  ClusterName = "oracle rac name"
+	  [[Oracles.instances]]
+	    ConnectionString = "/"
+	    Role = "sysdba"
+	  [[Oracles.instances]]
+	    ConnectionString = "username/password@oraclehost/sid"
+	  [[Oracles.instances]]
+	    ConnectionString = "/@localnodevip/sid"
+	    Role = "sysdba"
+
+>>>>>>> master
 
 Windows
 

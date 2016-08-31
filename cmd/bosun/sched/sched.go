@@ -1,18 +1,17 @@
 package sched // import "bosun.org/cmd/bosun/sched"
 
 import (
-	"encoding/gob"
 	"fmt"
-	"net"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/net/context"
+
 	"bosun.org/cmd/bosun/cache"
 	"bosun.org/cmd/bosun/conf"
 	"bosun.org/cmd/bosun/database"
-	"bosun.org/cmd/bosun/expr"
 	"bosun.org/cmd/bosun/search"
 	"bosun.org/collect"
 	"bosun.org/metadata"
@@ -20,18 +19,12 @@ import (
 	"bosun.org/opentsdb"
 	"bosun.org/slog"
 	"github.com/MiniProfiler/go/miniprofiler"
-	"github.com/boltdb/bolt"
 	"github.com/bradfitz/slice"
-	"github.com/tatsushid/go-fastping"
+	"github.com/kylebrandt/boolq"
 )
 
 func utcNow() time.Time {
 	return time.Now().UTC()
-}
-
-func init() {
-	gob.Register(expr.Number(0))
-	gob.Register(expr.Scalar(0))
 }
 
 type Schedule struct {
@@ -40,10 +33,14 @@ type Schedule struct {
 	mutexAquired  time.Time
 	mutexWaitTime int64
 
-	Conf  *conf.Conf
-	Group map[time.Time]models.AlertKeys
+	RuleConf   conf.RuleConfProvider
+	SystemConf conf.SystemConfProvider
+	Group      map[time.Time]models.AlertKeys
 
 	Search *search.Search
+
+	skipLast bool
+	quiet    bool
 
 	//channel signals an alert has added notifications, and notifications should be processed.
 	nc chan interface{}
@@ -53,48 +50,56 @@ type Schedule struct {
 	//unknown states that need to be notified about. Collected and sent in batches.
 	pendingUnknowns map[*conf.Notification][]*models.IncidentState
 
-	db *bolt.DB
-
 	lastLogTimes map[models.AlertKey]time.Time
 	LastCheck    time.Time
 
 	ctx *checkContext
 
 	DataAccess database.DataAccess
+
+	// runnerContext is a context to track running alert routines
+	runnerContext context.Context
+	// cancelChecks is the function to call to cancel all alert routines
+	cancelChecks context.CancelFunc
+	// checksRunning waits for alert checks to finish before reloading
+	// things that take significant time should be cancelled (i.e. expression execution)
+	// whereas the runHistory is allowed to complete
+	checksRunning sync.WaitGroup
 }
 
-func (s *Schedule) Init(c *conf.Conf) error {
+func (s *Schedule) Init(systemConf conf.SystemConfProvider, ruleConf conf.RuleConfProvider, skipLast, quiet bool) error {
 	//initialize all variables and collections so they are ready to use.
 	//this will be called once at app start, and also every time the rule
 	//page runs, so be careful not to spawn long running processes that can't
 	//be avoided.
-	var err error
-	s.Conf = c
+	//var err error
+	s.skipLast = skipLast
+	s.quiet = quiet
+	s.SystemConf = systemConf
+	s.RuleConf = ruleConf
 	s.Group = make(map[time.Time]models.AlertKeys)
 	s.pendingUnknowns = make(map[*conf.Notification][]*models.IncidentState)
 	s.lastLogTimes = make(map[models.AlertKey]time.Time)
 	s.LastCheck = utcNow()
 	s.ctx = &checkContext{utcNow(), cache.New(0)}
+
+	// Initialize the context and waitgroup used to gracefully shutdown bosun as well as reload
+	s.runnerContext, s.cancelChecks = context.WithCancel(context.Background())
+	s.checksRunning = sync.WaitGroup{}
+
 	if s.DataAccess == nil {
-		if c.RedisHost != "" {
-			s.DataAccess = database.NewDataAccess(c.RedisHost, true, c.RedisDb, c.RedisPassword)
+		if systemConf.GetRedisHost() != "" {
+			s.DataAccess = database.NewDataAccess(systemConf.GetRedisHost(), true, systemConf.GetRedisDb(), systemConf.GetRedisPassword())
 		} else {
-			bind := "127.0.0.1:9565"
-			_, err := database.StartLedis(c.LedisDir, bind)
+			_, err := database.StartLedis(systemConf.GetLedisDir(), systemConf.GetLedisBindAddr())
 			if err != nil {
 				return err
 			}
-			s.DataAccess = database.NewDataAccess(bind, false, 0, "")
+			s.DataAccess = database.NewDataAccess(systemConf.GetLedisBindAddr(), false, 0, "")
 		}
 	}
 	if s.Search == nil {
-		s.Search = search.NewSearch(s.DataAccess)
-	}
-	if c.StateFile != "" {
-		s.db, err = bolt.Open(c.StateFile, 0600, nil)
-		if err != nil {
-			return err
-		}
+		s.Search = search.NewSearch(s.DataAccess, skipLast)
 	}
 	return nil
 }
@@ -369,30 +374,42 @@ func (s *Schedule) MarshalGroups(T miniprofiler.Timer, filter string) (*StateGro
 	var err error
 	status := make(States)
 	t := StateGroups{
-		TimeAndDate: s.Conf.TimeAndDate,
+		TimeAndDate: s.SystemConf.GetTimeAndDate(),
 	}
 	t.FailingAlerts, t.UnclosedErrors = s.getErrorCounts()
 	T.Step("Setup", func(miniprofiler.Timer) {
-		matches, err2 := makeFilter(filter)
-		if err2 != nil {
-			err = err2
-			return
-		}
 		status2, err2 := s.GetOpenStates()
 		if err2 != nil {
 			err = err2
 			return
 		}
+		var parsedExpr *boolq.Tree
+		parsedExpr, err2 = boolq.Parse(filter)
+		if err2 != nil {
+			err = err2
+			return
+		}
 		for k, v := range status2 {
-			a := s.Conf.Alerts[k.Name()]
+			a := s.RuleConf.GetAlert(k.Name())
 			if a == nil {
 				slog.Errorf("unknown alert %s. Force closing.", k.Name())
-				if err2 = s.Action("bosun", "closing because alert doesn't exist.", models.ActionForceClose, k); err2 != nil {
+				if err2 = s.ActionByAlertKey("bosun", "closing because alert doesn't exist.", models.ActionForceClose, k); err2 != nil {
 					slog.Error(err2)
 				}
 				continue
 			}
-			if matches(s.Conf, a, v) {
+			is, err2 := MakeIncidentSummary(s.RuleConf, silenced, v)
+			if err2 != nil {
+				err = err2
+				return
+			}
+			match := false
+			match, err2 = boolq.AskParsedExpr(parsedExpr, is)
+			if err2 != nil {
+				err = err2
+				return
+			}
+			if match {
 				status[k] = v
 			}
 		}
@@ -410,7 +427,7 @@ func (s *Schedule) MarshalGroups(T miniprofiler.Timer, filter string) (*StateGro
 			case models.StWarning, models.StCritical, models.StUnknown:
 				var sets map[string]models.AlertKeys
 				T.Step(fmt.Sprintf("GroupSets (%d): %v", len(states), tuple), func(T miniprofiler.Timer) {
-					sets = states.GroupSets(s.Conf.MinGroupSize)
+					sets = states.GroupSets(s.SystemConf.GetMinGroupSize())
 				})
 				for name, group := range sets {
 					g := StateGroup{
@@ -424,6 +441,7 @@ func (s *Schedule) MarshalGroups(T miniprofiler.Timer, filter string) (*StateGro
 						st := status[ak]
 						st.Body = ""
 						st.EmailBody = nil
+						st.Attachments = nil
 						g.Children = append(g.Children, &StateGroup{
 							Active:   tuple.Active,
 							Status:   tuple.Status,
@@ -487,8 +505,8 @@ func marshalTime(t time.Time) string {
 var DefaultSched = &Schedule{}
 
 // Load loads a configuration into the default schedule.
-func Load(c *conf.Conf) error {
-	return DefaultSched.Load(c)
+func Load(systemConf conf.SystemConfProvider, ruleConf conf.RuleConfProvider, skipLast, quiet bool) error {
+	return DefaultSched.Init(systemConf, ruleConf, skipLast, quiet)
 }
 
 // Run runs the default schedule.
@@ -496,65 +514,28 @@ func Run() error {
 	return DefaultSched.Run()
 }
 
-func (s *Schedule) Load(c *conf.Conf) error {
-	if err := s.Init(c); err != nil {
-		return err
-	}
-	if s.db == nil {
-		return nil
-	}
-	return s.RestoreState()
+func Close(reload bool) {
+	DefaultSched.Close(reload)
 }
 
-func Close() {
-	DefaultSched.Close()
-}
-
-func (s *Schedule) Close() {
+func (s *Schedule) Close(reload bool) {
+	s.cancelChecks()
+	s.checksRunning.Wait()
+	if s.skipLast || reload {
+		return
+	}
 	err := s.Search.BackupLast()
 	if err != nil {
 		slog.Error(err)
 	}
 }
 
-const pingFreq = time.Second * 15
-
-func (s *Schedule) PingHosts() {
-	for range time.Tick(pingFreq) {
-		hosts, err := s.Search.TagValuesByTagKey("host", s.Conf.PingDuration)
-		if err != nil {
-			slog.Error(err)
-			continue
-		}
-		for _, host := range hosts {
-			go pingHost(host)
-		}
-	}
+func (s *Schedule) Reset() {
+	DefaultSched = &Schedule{}
 }
 
-func pingHost(host string) {
-	p := fastping.NewPinger()
-	tags := opentsdb.TagSet{"dst_host": host}
-	resolved := 0
-	defer func() {
-		collect.Put("ping.resolved", tags, resolved)
-	}()
-	ra, err := net.ResolveIPAddr("ip4:icmp", host)
-	if err != nil {
-		return
-	}
-	resolved = 1
-	p.AddIPAddr(ra)
-	p.MaxRTT = time.Second * 5
-	timeout := 1
-	p.OnRecv = func(addr *net.IPAddr, t time.Duration) {
-		collect.Put("ping.rtt", tags, float64(t)/float64(time.Millisecond))
-		timeout = 0
-	}
-	if err := p.Run(); err != nil {
-		slog.Errorln(err)
-	}
-	collect.Put("ping.timeout", tags, timeout)
+func Reset() {
+	DefaultSched.Reset()
 }
 
 func init() {
@@ -564,20 +545,12 @@ func init() {
 		"The number of seconds it took Bosun to check each alert rule.")
 	metadata.AddMetricMeta("bosun.check.err", metadata.Gauge, metadata.Error,
 		"The running count of the number of errors Bosun has received while trying to evaluate an alert expression.")
-	metadata.AddMetricMeta("bosun.ping.resolved", metadata.Gauge, metadata.Bool,
-		"1=Ping resolved to an IP Address. 0=Ping failed to resolve to an IP Address.")
-	metadata.AddMetricMeta("bosun.ping.rtt", metadata.Gauge, metadata.MilliSecond,
-		"The number of milliseconds for the echo reply to be received. Also known as Round Trip Time.")
-	metadata.AddMetricMeta("bosun.ping.timeout", metadata.Gauge, metadata.Ok,
-		"0=Ping responded before timeout. 1=Ping did not respond before 5 second timeout.")
+
 	metadata.AddMetricMeta("bosun.actions", metadata.Gauge, metadata.Count,
 		"The running count of actions performed by individual users (Closed alert, Acknowledged alert, etc).")
 }
 
-func (s *Schedule) Action(user, message string, t models.ActionType, ak models.AlertKey) error {
-	if err := collect.Add("actions", opentsdb.TagSet{"user": user, "alert": ak.Name(), "type": t.String()}, 1); err != nil {
-		slog.Errorln(err)
-	}
+func (s *Schedule) ActionByAlertKey(user, message string, t models.ActionType, ak models.AlertKey) error {
 	st, err := s.DataAccess.State().GetLatestIncident(ak)
 	if err != nil {
 		return err
@@ -585,23 +558,49 @@ func (s *Schedule) Action(user, message string, t models.ActionType, ak models.A
 	if st == nil {
 		return fmt.Errorf("no such alert key: %v", ak)
 	}
+	_, err = s.action(user, message, t, st)
+	return err
+}
+
+func (s *Schedule) ActionByIncidentId(user, message string, t models.ActionType, id int64) (models.AlertKey, error) {
+	st, err := s.DataAccess.State().GetIncidentState(id)
+	if err != nil {
+		return "", err
+	}
+	if st == nil {
+		return "", fmt.Errorf("no incident with id: %v", id)
+	}
+	return s.action(user, message, t, st)
+}
+
+func (s *Schedule) action(user, message string, t models.ActionType, st *models.IncidentState) (ak models.AlertKey, e error) {
+	if err := collect.Add("actions", opentsdb.TagSet{"user": user, "alert": st.AlertKey.Name(), "type": t.String()}, 1); err != nil {
+		slog.Errorln(err)
+	}
+	defer func() {
+		if e == nil {
+			if err := collect.Add("actions", opentsdb.TagSet{"user": user, "alert": st.AlertKey.Name(), "type": t.String()}, 1); err != nil {
+				slog.Errorln(err)
+			}
+			if err := s.DataAccess.Notifications().ClearNotifications(st.AlertKey); err != nil {
+				e = err
+			}
+		}
+	}()
 	isUnknown := st.LastAbnormalStatus == models.StUnknown
 	timestamp := utcNow()
 	switch t {
 	case models.ActionAcknowledge:
 		if !st.NeedAck {
-			return fmt.Errorf("alert already acknowledged")
+			return "", fmt.Errorf("alert already acknowledged")
 		}
 		if !st.Open {
-			return fmt.Errorf("cannot acknowledge closed alert")
+			return "", fmt.Errorf("cannot acknowledge closed alert")
 		}
 		st.NeedAck = false
-		if err := s.DataAccess.Notifications().ClearNotifications(ak); err != nil {
-			return err
-		}
 	case models.ActionClose:
 		if st.IsActive() {
-			return fmt.Errorf("cannot close active alert")
+			return "", fmt.Errorf("cannot close active alert")
 		}
 		fallthrough
 	case models.ActionForceClose:
@@ -609,18 +608,15 @@ func (s *Schedule) Action(user, message string, t models.ActionType, ak models.A
 		st.End = &timestamp
 	case models.ActionForget:
 		if !isUnknown {
-			return fmt.Errorf("can only forget unknowns")
+			return "", fmt.Errorf("can only forget unknowns")
 		}
 		fallthrough
 	case models.ActionPurge:
-		return s.DataAccess.State().Forget(ak)
+		return st.AlertKey, s.DataAccess.State().Forget(st.AlertKey)
+	case models.ActionNote:
+		// pass
 	default:
-		return fmt.Errorf("unknown action type: %v", t)
-	}
-	// Would like to also track the alert group, but I believe this is impossible because any character
-	// that could be used as a delimiter could also be a valid tag key or tag value character
-	if err := collect.Add("actions", opentsdb.TagSet{"user": user, "alert": ak.Name(), "type": t.String()}, 1); err != nil {
-		slog.Errorln(err)
+		return "", fmt.Errorf("unknown action type: %v", t)
 	}
 	st.Actions = append(st.Actions, models.Action{
 		Message: message,
@@ -628,8 +624,8 @@ func (s *Schedule) Action(user, message string, t models.ActionType, ak models.A
 		Type:    t,
 		User:    user,
 	})
-	_, err = s.DataAccess.State().UpdateIncidentState(st)
-	return err
+	_, err := s.DataAccess.State().UpdateIncidentState(st)
+	return st.AlertKey, err
 }
 
 type IncidentStatus struct {
@@ -683,4 +679,8 @@ func (s *Schedule) getErrorCounts() (failing, total int) {
 		slog.Error(err)
 	}
 	return
+}
+
+func (s *Schedule) GetQuiet() bool {
+	return s.quiet
 }

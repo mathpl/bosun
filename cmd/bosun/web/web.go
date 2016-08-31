@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"bosun.org/_version"
-	"bosun.org/cmd/bosun/conf"
+	"bosun.org/cmd/bosun/conf/rule"
 	"bosun.org/cmd/bosun/database"
 	"bosun.org/cmd/bosun/sched"
 	"bosun.org/collect"
@@ -29,9 +29,9 @@ import (
 	"bosun.org/util"
 
 	"github.com/MiniProfiler/go/miniprofiler"
+	"github.com/bosun-monitor/annotate/backend"
+	"github.com/bosun-monitor/annotate/web"
 	"github.com/gorilla/mux"
-	"github.com/kylebrandt/annotate/backend"
-	"github.com/kylebrandt/annotate/web"
 )
 
 var (
@@ -40,6 +40,7 @@ var (
 	schedule        = sched.DefaultSched
 	InternetProxy   *url.URL
 	annotateBackend backend.Backend
+	reload          func() error
 )
 
 const (
@@ -65,7 +66,7 @@ func init() {
 		"HTTP response codes from the backend server for request relayed through Bosun.")
 }
 
-func Listen(listenAddr string, devMode bool, tsdbHost string) error {
+func Listen(listenAddr string, devMode bool, tsdbHost string, reloadFunc func() error) error {
 	if devMode {
 		slog.Infoln("using local web assets")
 	}
@@ -79,6 +80,8 @@ func Listen(listenAddr string, devMode bool, tsdbHost string) error {
 		}
 		return templates
 	}
+
+	reload = reloadFunc
 
 	if !devMode {
 		tpl := indexTemplate()
@@ -97,14 +100,26 @@ func Listen(listenAddr string, devMode bool, tsdbHost string) error {
 	router.Handle("/api/alerts", JSON(Alerts))
 	router.Handle("/api/config", miniprofiler.NewHandler(Config))
 	router.Handle("/api/config_test", miniprofiler.NewHandler(ConfigTest))
-	router.Handle("/api/egraph/{bs}.svg", JSON(ExprGraph))
+	router.Handle("/api/save_enabled", JSON(SaveEnabled))
+	if schedule.SystemConf.ReloadEnabled() { // Is true of save is enabled
+		router.Handle("/api/reload", JSON(Reload)).Methods(http.MethodPost)
+	}
+	if schedule.SystemConf.SaveEnabled() {
+		router.Handle("/api/config/bulkedit", miniprofiler.NewHandler(BulkEdit)).Methods(http.MethodPost)
+		router.Handle("/api/config/save", miniprofiler.NewHandler(SaveConfig)).Methods(http.MethodPost)
+		router.Handle("/api/config/diff", miniprofiler.NewHandler(DiffConfig)).Methods(http.MethodPost)
+		router.Handle("/api/config/running_hash", JSON(ConfigRunningHash))
+	}
+	router.Handle("/api/egraph/{bs}.{format:svg|png}", JSON(ExprGraph))
 	router.Handle("/api/errors", JSON(ErrorHistory))
 	router.Handle("/api/expr", JSON(Expr))
 	router.Handle("/api/graph", JSON(Graph))
 	router.Handle("/api/health", JSON(HealthCheck))
 	router.Handle("/api/host", JSON(Host))
 	router.Handle("/api/last", JSON(Last))
+	router.Handle("/api/quiet", JSON(Quiet))
 	router.Handle("/api/incidents", JSON(Incidents))
+	router.Handle("/api/incidents/open", JSON(ListOpenIncidents))
 	router.Handle("/api/incidents/events", JSON(IncidentEvents))
 	router.Handle("/api/metadata/get", JSON(GetMetadata))
 	router.Handle("/api/metadata/metrics", JSON(MetadataMetrics))
@@ -127,20 +142,25 @@ func Listen(listenAddr string, devMode bool, tsdbHost string) error {
 	router.Handle("/api/annotate", JSON(AnnotateEnabled))
 
 	// Annotations
-	if schedule.Conf.AnnotateEnabled() {
-		var err error
-		index := schedule.Conf.AnnotateIndex
+	if schedule.SystemConf.AnnotateEnabled() {
+		index := schedule.SystemConf.GetAnnotateIndex()
 		if index == "" {
 			index = "annotate"
 		}
-		annotateBackend, err = backend.NewElastic(schedule.Conf.AnnotateElasticHosts, index)
-		if err != nil {
-			return err
-		}
-		if err := annotateBackend.InitBackend(); err != nil {
-			return err
-		}
+		annotateBackend = backend.NewElastic(schedule.SystemConf.GetAnnotateElasticHosts(), index)
+
+		go func() {
+			for {
+				err := annotateBackend.InitBackend()
+				if err == nil {
+					return
+				}
+				slog.Warningf("could not initalize annotate backend, will try again: %v", err)
+				time.Sleep(time.Second * 30)
+			}
+		}()
 		web.AddRoutes(router, "/api", []backend.Backend{annotateBackend}, false, false)
+
 	}
 
 	router.HandleFunc("/api/version", Version)
@@ -158,6 +178,10 @@ func Listen(listenAddr string, devMode bool, tsdbHost string) error {
 
 type relayProxy struct {
 	*httputil.ReverseProxy
+}
+
+func ResetSchedule() {
+	schedule = sched.DefaultSched
 }
 
 type passthru struct {
@@ -234,6 +258,18 @@ func IndexTSDB(w http.ResponseWriter, r *http.Request) {
 	indexTSDB(r, body)
 }
 
+type appSetings struct {
+	SaveEnabled     bool
+	AnnotateEnabled bool
+	Quiet           bool
+	Version         opentsdb.Version
+}
+
+type indexVariables struct {
+	Includes template.HTML
+	Settings string
+}
+
 func Index(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/graph" {
 		r.ParseForm()
@@ -245,10 +281,26 @@ func Index(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	r.Header.Set(miniprofilerHeader, "true")
-	err := indexTemplate().Execute(w, struct {
-		Includes template.HTML
-	}{
+	// Set some global settings for the UI to know about. This saves us from
+	// having to make an HTTP call to see what features should be enabled
+	// in the UI
+	openTSDBVersion := opentsdb.Version{0, 0}
+	if schedule.SystemConf.GetTSDBContext() != nil {
+		openTSDBVersion = schedule.SystemConf.GetTSDBContext().Version()
+	}
+	settings, err := json.Marshal(appSetings{
+		schedule.SystemConf.SaveEnabled(),
+		schedule.SystemConf.AnnotateEnabled(),
+		schedule.GetQuiet(),
+		openTSDBVersion,
+	})
+	if err != nil {
+		serveError(w, err)
+		return
+	}
+	err = indexTemplate().Execute(w, indexVariables{
 		t.Includes(),
+		string(settings),
 	})
 	if err != nil {
 		serveError(w, err)
@@ -300,8 +352,8 @@ func Shorten(w http.ResponseWriter, r *http.Request) {
 		Host:   "www.googleapis.com",
 		Path:   "/urlshortener/v1/url",
 	}
-	if schedule.Conf.ShortURLKey != "" {
-		u.RawQuery = "key=" + schedule.Conf.ShortURLKey
+	if schedule.SystemConf.GetShortURLKey() != "" {
+		u.RawQuery = "key=" + schedule.SystemConf.GetShortURLKey()
 	}
 	j, err := json.Marshal(struct {
 		LongURL string `json:"longUrl"`
@@ -339,21 +391,44 @@ type Health struct {
 	RuleCheck bool
 }
 
+func Reload(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
+	d := json.NewDecoder(r.Body)
+	var sane struct {
+		Reload bool
+	}
+	if err := d.Decode(&sane); err != nil {
+		return nil, fmt.Errorf("failed to decode post body: %v", err)
+	}
+	if !sane.Reload {
+		return nil, fmt.Errorf("reload must be set to true in post body")
+	}
+	err := reload()
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload: %v", err)
+	}
+	return "reloaded", nil
+
+}
+
+func Quiet(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
+	return schedule.GetQuiet(), nil
+}
+
 func HealthCheck(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
 	var h Health
-	h.RuleCheck = schedule.LastCheck.After(time.Now().Add(-schedule.Conf.CheckFrequency))
+	h.RuleCheck = schedule.LastCheck.After(time.Now().Add(-schedule.SystemConf.GetCheckFrequency()))
 	return h, nil
 }
 
 func OpenTSDBVersion(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	if schedule.Conf.TSDBContext() != nil {
-		return schedule.Conf.TSDBContext().Version(), nil
+	if schedule.SystemConf.GetTSDBContext() != nil {
+		return schedule.SystemConf.GetTSDBContext().Version(), nil
 	}
 	return opentsdb.Version{0, 0}, nil
 }
 
 func AnnotateEnabled(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	return schedule.Conf.AnnotateEnabled(), nil
+	return schedule.SystemConf.AnnotateEnabled(), nil
 }
 
 func PutMetadata(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
@@ -561,6 +636,7 @@ func Action(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (inter
 		User    string
 		Message string
 		Keys    []string
+		Ids     []int64
 		Notify  bool
 	}
 	j := json.NewDecoder(r.Body)
@@ -579,6 +655,8 @@ func Action(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (inter
 		at = models.ActionForceClose
 	case "purge":
 		at = models.ActionPurge
+	case "note":
+		at = models.ActionNote
 	}
 	errs := make(MultiError)
 	r.ParseForm()
@@ -588,9 +666,17 @@ func Action(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (inter
 		if err != nil {
 			return nil, err
 		}
-		err = schedule.Action(data.User, data.Message, at, ak)
+		err = schedule.ActionByAlertKey(data.User, data.Message, at, ak)
 		if err != nil {
 			errs[key] = err
+		} else {
+			successful = append(successful, ak)
+		}
+	}
+	for _, id := range data.Ids {
+		ak, err := schedule.ActionByIncidentId(data.User, data.Message, at, id)
+		if err != nil {
+			errs[fmt.Sprintf("%v", id)] = err
 		} else {
 			successful = append(successful, ak)
 		}
@@ -690,7 +776,7 @@ func ConfigTest(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) {
 		serveError(w, fmt.Errorf("empty config"))
 		return
 	}
-	_, err = conf.New("test", string(b))
+	_, err = rule.NewConf("test", schedule.SystemConf.EnabledBackends(), string(b))
 	if err != nil {
 		fmt.Fprintf(w, err.Error())
 	}
@@ -706,7 +792,7 @@ func Config(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		text = schedule.Conf.RawText
+		text = schedule.RuleConf.GetRawText()
 	}
 	fmt.Fprint(w, text)
 }

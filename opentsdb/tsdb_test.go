@@ -20,6 +20,13 @@ func TestClean(t *testing.T) {
 	}
 }
 
+func TestEmptyPoint(t *testing.T) {
+	d := DataPoint{}
+	if d.Clean() == nil {
+		t.Fatal("empty datapoint should not be cleanable")
+	}
+}
+
 func TestParseQueryV2_1(t *testing.T) {
 	tests := []struct {
 		query string
@@ -67,6 +74,12 @@ func TestParseQueryV2_2(t *testing.T) {
 		// return errors. This is because there can be a regex filter now. Might
 		// be issues with escaping there however
 		{"sum:stat{a=b=c}", false},
+
+		//test fill policies
+		{"sum:10m-avg-zero:proc.stat.cpu{t=v,o=k}", false},
+		{"sum:10m-avg-:proc.stat.cpu{t=v,o=k}", true},
+		{"sum:10m-avg-none:rate:proc.stat.cpu", false},
+		{"sum:10m-avg-:rate{counter,1,2}:proc.stat.cpu{t=v,o=k}", true},
 	}
 	for _, q := range tests {
 		_, err := ParseQuery(q.query, Version2_2)
@@ -288,7 +301,7 @@ func TestQueryString(t *testing.T) {
 	}
 }
 
-func TestValidTag(t *testing.T) {
+func TestValidTSDBString(t *testing.T) {
 	tests := map[string]bool{
 		"abcXYZ012_./-": true,
 
@@ -297,7 +310,7 @@ func TestValidTag(t *testing.T) {
 		"a=b": false,
 	}
 	for s, v := range tests {
-		r := ValidTag(s)
+		r := ValidTSDBString(s)
 		if v != r {
 			t.Errorf("%v: got %v, expected %v", s, r, v)
 		}
@@ -326,5 +339,35 @@ func TestAllSubsets(t *testing.T) {
 	subsets := ts.AllSubsets()
 	if len(subsets) != 15 {
 		t.Fatal("Expect 15 subsets")
+	}
+}
+
+func TestReplace(t *testing.T) {
+	tests := []struct{ in, out string }{
+		{"abc", "abc"},
+		{"ny-web01", "ny-web01"},
+		{"_./", "_./"},
+		{"%%%a", ".a"},
+	}
+	for i, test := range tests {
+		out, err := Replace(test.in, ".")
+		if err != nil {
+			t.Errorf("Test %d: %s", i, err)
+		}
+		if out != test.out {
+			t.Errorf("Test %d: %s != %s", i, out, test.out)
+		}
+	}
+}
+
+func BenchmarkReplace_Noop(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		Replace("abcdefghijklmnopqrstuvwxyz", "")
+	}
+}
+
+func BenchmarkReplace_Something(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		Replace("abcdef&hij@@$$opq#stuvw*yz", "")
 	}
 }

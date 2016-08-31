@@ -2,6 +2,7 @@ package collectors
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
@@ -136,6 +137,10 @@ func c_windows_processes() (opentsdb.MultiDataPoint, error) {
 			}
 		}
 
+		if v.IDProcess == uint32(os.Getpid()) {
+			TotalScollectorMemoryMB = v.WorkingSetPrivate / 1024 / 1024
+		}
+
 		if !(service_match || process_match || iis_match) {
 			continue
 		}
@@ -147,7 +152,9 @@ func c_windows_processes() (opentsdb.MultiDataPoint, error) {
 		AddTS(&md, "win.proc.cpu", ts, v.PercentUserTime/NS100_Seconds/numberOfLogicalProcessors, opentsdb.TagSet{"type": "user"}.Merge(tags), metadata.Counter, metadata.Pct, descWinProcCPU_user)
 		totalCPUByName[name] += v.PercentUserTime / NS100_Seconds / numberOfLogicalProcessors
 		AddTS(&md, "win.proc.cpu_total", ts, v.PercentProcessorTime/NS100_Seconds/numberOfLogicalProcessors, tags, metadata.Counter, metadata.Pct, descWinProcCPU_total)
-		Add(&md, "win.proc.elapsed_time", (v.Timestamp_Object-v.ElapsedTime)/v.Frequency_Object, tags, metadata.Gauge, metadata.Second, descWinProcElapsed_time)
+		if v.Frequency_Object != 0 {
+			Add(&md, "win.proc.elapsed_time", (v.Timestamp_Object-v.ElapsedTime)/v.Frequency_Object, tags, metadata.Gauge, metadata.Second, descWinProcElapsed_time)
+		}
 		Add(&md, "win.proc.handle_count", v.HandleCount, tags, metadata.Gauge, metadata.Count, descWinProcHandle_count)
 		Add(&md, "win.proc.io_bytes", v.IOOtherBytesPersec, opentsdb.TagSet{"type": "other"}.Merge(tags), metadata.Counter, metadata.BytesPerSecond, descWinProcIo_bytes_other)
 		Add(&md, "win.proc.io_bytes", v.IOReadBytesPersec, opentsdb.TagSet{"type": "read"}.Merge(tags), metadata.Counter, metadata.BytesPerSecond, descWinProcIo_bytes_read)
@@ -270,6 +277,7 @@ type Win32_Service struct {
 	Started    bool
 	Status     string
 	WaitHint   uint32
+	StartMode  string
 }
 
 type WorkerProcess struct {

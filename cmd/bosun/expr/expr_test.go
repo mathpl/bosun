@@ -64,7 +64,11 @@ func TestExprSimple(t *testing.T) {
 			t.Error(err)
 			break
 		}
-		r, _, err := e.Execute(nil, nil, nil, nil, client.Config{}, nil, nil, time.Now(), 0, false, nil, nil, nil)
+		backends := &Backends{
+			InfluxConfig: client.Config{},
+		}
+		providers := &BosunProviders{}
+		r, _, err := e.Execute(backends, providers, nil, time.Now(), 0, false)
 		if err != nil {
 			t.Error(err)
 			break
@@ -205,7 +209,12 @@ func TestQueryExpr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		results, _, err := e.Execute(&opentsdb.LimitContext{Host: u.Host, Limit: 1e10, TSDBVersion: opentsdb.Version2_1}, nil, nil, nil, client.Config{}, nil, nil, queryTime, 0, false, nil, nil, nil)
+		backends := &Backends{
+			TSDBContext:  &opentsdb.LimitContext{Host: u.Host, Limit: 1e10, TSDBVersion: opentsdb.Version2_1},
+			InfluxConfig: client.Config{},
+		}
+		providers := &BosunProviders{}
+		results, _, err := e.Execute(backends, providers, nil, queryTime, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,6 +254,67 @@ func TestQueryExpr(t *testing.T) {
 			default:
 				t.Errorf("%v: unknown type %T", exprText, r.Value)
 			}
+		}
+	}
+}
+
+func TestSeriesOperations(t *testing.T) {
+	seriesA := `series("key=a", 0, 1, 1, 2, 2, 1, 3, 4)`
+	seriesB := `series("key=a", 0, 1,       2, 0, 3, 4)`
+	seriesC := `series("key=a", 4, 1,       6, 0, 7, 4)`
+	template := "%v %v %v"
+	tests := []exprInOut{
+		{
+			fmt.Sprintf(template, seriesA, "+", seriesB),
+			Results{
+				Results: ResultSlice{
+					&Result{
+						Value: Series{
+							time.Unix(0, 0): 2,
+							time.Unix(2, 0): 1,
+							time.Unix(3, 0): 8,
+						},
+						Group: opentsdb.TagSet{"key": "a"},
+					},
+				},
+			},
+			false,
+		},
+		{
+			fmt.Sprintf(template, seriesA, "+", seriesC),
+			Results{
+				Results: ResultSlice{
+					&Result{
+						Value: Series{
+						// Should be empty
+						},
+						Group: opentsdb.TagSet{"key": "a"},
+					},
+				},
+			},
+			false,
+		},
+		{
+			fmt.Sprintf(template, seriesA, "/", seriesB),
+			Results{
+				Results: ResultSlice{
+					&Result{
+						Value: Series{
+							time.Unix(0, 0): 1,
+							time.Unix(2, 0): math.Inf(1),
+							time.Unix(3, 0): 1,
+						},
+						Group: opentsdb.TagSet{"key": "a"},
+					},
+				},
+			},
+			false,
+		},
+	}
+	for _, test := range tests {
+		err := testExpression(test)
+		if err != nil {
+			t.Error(err)
 		}
 	}
 }

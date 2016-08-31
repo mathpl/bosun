@@ -27,6 +27,7 @@ import (
 	"bosun.org/slog"
 	"bosun.org/util"
 	"github.com/BurntSushi/toml"
+	"github.com/facebookgo/httpcontrol"
 )
 
 var (
@@ -41,9 +42,22 @@ var (
 	flagVersion         = flag.Bool("version", false, "Prints the version and exits.")
 	flagConf            = flag.String("conf", "", "Location of configuration file. Defaults to scollector.toml in directory of the scollector executable.")
 	flagToToml          = flag.String("totoml", "", "Location of destination toml file to convert. Reads from value of -conf.")
+	flagNtlm            = flag.Bool("useNtlm", false, "Specifies to use NTLM authentication.")
 
 	mains []func()
 )
+
+type scollectorHTTPTransport struct {
+	UserAgent string
+	http.RoundTripper
+}
+
+func (t *scollectorHTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Add("User-Agent", t.UserAgent)
+	}
+	return t.RoundTripper.RoundTrip(req)
+}
 
 func main() {
 	flag.Parse()
@@ -63,8 +77,25 @@ func main() {
 		m()
 	}
 	conf := readConf()
+	ua := "Scollector/" + version.ShortVersion()
+	if conf.UserAgentMessage != "" {
+		ua += fmt.Sprintf(" (%s)", conf.UserAgentMessage)
+	}
+	client := &http.Client{
+		Transport: &scollectorHTTPTransport{
+			ua,
+			&httpcontrol.Transport{
+				RequestTimeout: time.Minute,
+			},
+		},
+	}
+	http.DefaultClient = client
+	collect.DefaultClient = client
 	if *flagHost != "" {
 		conf.Host = *flagHost
+	}
+	if *flagNtlm {
+		conf.UseNtlm = *flagNtlm
 	}
 	if *flagFilter != "" {
 		conf.Filter = strings.Split(*flagFilter, ",")
@@ -113,7 +144,7 @@ func main() {
 		check(collectors.ICMP(i.Host))
 	}
 	for _, a := range conf.AWS {
-		check(collectors.AWS(a.AccessKey, a.SecretKey, a.Region))
+		check(collectors.AWS(a.AccessKey, a.SecretKey, a.Region, a.BillingProductCodesRegex, a.BillingBucketName, a.BillingBucketPath, a.BillingPurgeDays))
 	}
 	for _, v := range conf.Vsphere {
 		check(collectors.Vsphere(v.User, v.Password, v.Host))
@@ -150,7 +181,7 @@ func main() {
 	}
 
 	for _, x := range conf.ExtraHop {
-		check(collectors.ExtraHop(x.Host, x.APIKey, x.FilterBy, x.FilterPercent))
+		check(collectors.ExtraHop(x.Host, x.APIKey, x.FilterBy, x.FilterPercent, x.AdditionalMetrics, x.CertificateSubjectMatch, x.CertificateActivityGroup))
 	}
 
 	if err != nil {
@@ -212,10 +243,11 @@ func main() {
 	if u != nil {
 		slog.Infoln("OpenTSDB host:", u)
 	}
+	collect.UseNtlm = conf.UseNtlm
 	if err := collect.InitChan(u, "scollector", cdp); err != nil {
 		slog.Fatal(err)
 	}
-	if version.VersionDate != "" {
+	if collect.DisableDefaultCollectors == false && version.VersionDate != "" {
 		v, err := strconv.ParseInt(version.VersionDate, 10, 64)
 		if err == nil {
 			go func() {
@@ -240,14 +272,27 @@ func main() {
 		}
 		collect.MaxQueueLen = conf.MaxQueueLen
 	}
-
+	maxMemMB := uint64(500)
+	if conf.MaxMem != 0 {
+		maxMemMB = conf.MaxMem
+	}
 	go func() {
-		const maxMem = 500 * 1024 * 1024 // 500MB
 		var m runtime.MemStats
-		for range time.Tick(time.Minute) {
+		for range time.Tick(time.Second * 30) {
 			runtime.ReadMemStats(&m)
-			if m.Alloc > maxMem {
-				panic("memory max reached")
+			allocMB := m.Alloc / 1024 / 1024
+			if allocMB > maxMemMB {
+				slog.Fatalf("memory max runtime reached: (current alloc: %v megabytes, max: %v megabytes)", allocMB, maxMemMB)
+			}
+			//See proccess_windows.go and process_linux.go for total process memory usage.
+			//Note that in linux the rss metric includes shared pages, where as in
+			//Windows the private working set does not include shared memory.
+			//Total memory used seems to scale linerarly with m.Alloc.
+			//But we want this to catch a memory leak outside the runtime (WMI/CGO).
+			//So for now just add any runtime allocations to the allowed total limit.
+			maxMemTotalMB := maxMemMB + allocMB
+			if collectors.TotalScollectorMemoryMB > maxMemTotalMB {
+				slog.Fatalf("memory max total reached: (current total: %v megabytes, current runtime alloc: %v megabytes, max: %v megabytes)", collectors.TotalScollectorMemoryMB, allocMB, maxMemTotalMB)
 			}
 		}
 	}()

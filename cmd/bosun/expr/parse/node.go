@@ -58,6 +58,7 @@ const (
 	NodeUnary                  // Unary operator: !, -
 	NodeString                 // A string constant.
 	NodeNumber                 // A numerical constant.
+	NodeExpr                   // A sub expression
 )
 
 // Nodes.
@@ -104,10 +105,13 @@ func (f *FuncNode) StringAST() string {
 }
 
 func (f *FuncNode) Check(t *Tree) error {
+	if f.F.MapFunc && !t.mapExpr {
+		return fmt.Errorf("%v is only valid in a map expression", f.Name)
+	}
 	const errFuncType = "parse: bad argument type in %s, expected %s, got %s"
 	// For VArgs we make sure they are all of the expected type
 	if f.F.VArgs {
-		if len(f.Args) < len(f.F.Args) {
+		if len(f.Args) < len(f.F.Args) && !f.F.VArgsOmit {
 			return fmt.Errorf("parse: variable argument functions need at least one arg")
 		}
 	} else {
@@ -162,6 +166,48 @@ type NumberNode struct {
 	Uint64  uint64  // The unsigned integer value.
 	Float64 float64 // The floating-point value.
 	Text    string  // The original textual representation from the input.
+}
+
+type ExprNode struct {
+	NodeType
+	Pos
+	Text string
+	Tree *Tree
+}
+
+func newExprNode(text string, pos Pos) (*ExprNode, error) {
+	return &ExprNode{
+		NodeType: NodeExpr,
+		Text:     text,
+		Pos:      pos,
+	}, nil
+}
+
+func (s *ExprNode) String() string {
+	return fmt.Sprintf("%v", s.Text)
+}
+
+func (s *ExprNode) StringAST() string {
+	return s.String()
+}
+
+func (s *ExprNode) Check(*Tree) error {
+	return nil
+}
+
+func (s *ExprNode) Return() models.FuncType {
+	switch s.Tree.Root.Return() {
+	case models.TypeNumberSet, models.TypeScalar:
+		return models.TypeNumberExpr
+	case models.TypeSeriesSet:
+		return models.TypeSeriesExpr
+	default:
+		return models.TypeUnexpected
+	}
+}
+
+func (s *ExprNode) Tags() (Tags, error) {
+	return nil, nil
 }
 
 func newNumber(pos Pos, text string) (*NumberNode, error) {
@@ -270,15 +316,11 @@ func (b *BinaryNode) StringAST() string {
 func (b *BinaryNode) Check(t *Tree) error {
 	t1 := b.Args[0].Return()
 	t2 := b.Args[1].Return()
-	if t1 == models.TypeSeriesSet && t2 == models.TypeSeriesSet {
-		return fmt.Errorf("parse: type error in %s: at least one side must be a number", b)
+	if !(t1 == models.TypeSeriesSet || t1 == models.TypeNumberSet || t1 == models.TypeScalar) {
+		return fmt.Errorf("expected NumberSet, SeriesSet, or Scalar, got %v", string(t1))
 	}
-	check := t1
-	if t1 == models.TypeSeriesSet {
-		check = t2
-	}
-	if check != models.TypeNumberSet && check != models.TypeScalar {
-		return fmt.Errorf("parse: type error in %s: expected a number", b)
+	if !(t2 == models.TypeSeriesSet || t2 == models.TypeNumberSet || t2 == models.TypeScalar) {
+		return fmt.Errorf("expected NumberSet, SeriesSet, or Scalar, got %v", string(t1))
 	}
 	if err := b.Args[0].Check(t); err != nil {
 		return err
@@ -369,7 +411,7 @@ func Walk(n Node, f func(Node)) {
 		for _, a := range n.Args {
 			Walk(a, f)
 		}
-	case *NumberNode, *StringNode:
+	case *NumberNode, *StringNode, *ExprNode:
 		// Ignore.
 	case *UnaryNode:
 		Walk(n.Arg, f)

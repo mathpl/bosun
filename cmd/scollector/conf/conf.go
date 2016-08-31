@@ -25,6 +25,11 @@ type Conf struct {
 	BatchSize int
 	// MaxQueueLen is the number of metrics keept internally.
 	MaxQueueLen int
+	// MaxMem is the maximum number of megabytes that can be allocated
+	// before scollector panics (shuts down). Default of 500 MB. This
+	// is a saftey mechanism to protect the host from the monitoring
+	// agent
+	MaxMem uint64
 	// Filter filters collectors matching these terms.
 	Filter []string
 	// PProf is an IP:Port binding to be used for debugging with pprof package.
@@ -40,6 +45,12 @@ type Conf struct {
 
 	//Override default network interface expression
 	IfaceExpr string
+
+	// UseNtlm specifies if HTTP requests should authenticate with NTLM.
+	UseNtlm bool
+
+	// UserAgentMessage is an optional message that is appended to the User Agent
+	UserAgentMessage string
 
 	HAProxy        []HAProxy
 	SNMP           []SNMP
@@ -66,6 +77,8 @@ type Conf struct {
 	LocalListener       string
 	TagOverride         []TagOverride
 	HadoopHost          string
+	Oracles             []Oracle
+	Fastly              []Fastly
 }
 
 type HAProxy struct {
@@ -93,6 +106,11 @@ type GoogleAnalytics struct {
 	Sites    []GoogleAnalyticsSite
 }
 
+type Fastly struct {
+	Key            string
+	StatusBaseAddr string
+}
+
 type GoogleAnalyticsSite struct {
 	Name     string
 	Profile  string
@@ -111,9 +129,13 @@ type Vsphere struct {
 }
 
 type AWS struct {
-	AccessKey string
-	SecretKey string
-	Region    string
+	AccessKey                string
+	SecretKey                string
+	Region                   string
+	BillingProductCodesRegex string
+	BillingBucketName        string
+	BillingBucketPath        string
+	BillingPurgeDays         int
 }
 
 type SNMP struct {
@@ -174,7 +196,9 @@ type Github struct {
 }
 
 type Cadvisor struct {
-	URL string
+	URL         string
+	PerCpuUsage bool
+	IsRemote    bool
 }
 
 type RedisCounters struct {
@@ -183,10 +207,13 @@ type RedisCounters struct {
 }
 
 type ExtraHop struct {
-	Host          string
-	APIKey        string
-	FilterBy      string
-	FilterPercent int
+	Host                     string
+	APIKey                   string
+	FilterBy                 string
+	FilterPercent            int
+	AdditionalMetrics        []string
+	CertificateSubjectMatch  string
+	CertificateActivityGroup int
 }
 
 type TagOverride struct {
@@ -194,4 +221,14 @@ type TagOverride struct {
 	MatchedTags   map[string]string
 	Tags          map[string]string
 	Replace       map[string][]string
+}
+
+type Oracle struct {
+	ClusterName string
+	Instances   []OracleInstance
+}
+
+type OracleInstance struct {
+	ConnectionString string
+	Role             string
 }

@@ -1,7 +1,9 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"bosun.org/opentsdb"
@@ -11,12 +13,20 @@ import (
 
 // UniqueMetrics returns a sorted list of available metrics.
 func UniqueMetrics(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
-	values, err := schedule.Search.UniqueMetrics()
+	q := r.URL.Query()
+	var epoch int64
+	if v := q.Get("since"); v != "" {
+		var err error
+		epoch, err = strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			serveError(w, fmt.Errorf("could not convert since parameter (expecting epoch value): %v", err))
+		}
+	}
+	values, err := schedule.Search.UniqueMetrics(epoch)
 	if err != nil {
 		return nil, err
 	}
 	// remove anything starting with double underscore.
-	q := r.URL.Query()
 	if v := q.Get("unfiltered"); v != "" {
 		return values, nil
 	}
@@ -53,7 +63,16 @@ func FilteredTagsetsByMetric(t miniprofiler.Timer, w http.ResponseWriter, r *htt
 			return nil, err
 		}
 	}
-	return schedule.Search.FilteredTagSets(metric, tagset)
+
+	since := int64(0)
+	sinceStr := r.FormValue("since")
+	if sinceStr != "" {
+		since, err = strconv.ParseInt(sinceStr, 10, 64) //since will be set to 0 again in case of errors
+		if err != nil {
+			return nil, err
+		}
+	}
+	return schedule.Search.FilteredTagSets(metric, tagset, since)
 }
 
 func MetricsByTagPair(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
@@ -66,7 +85,7 @@ func MetricsByTagPair(t miniprofiler.Timer, w http.ResponseWriter, r *http.Reque
 func MetricsByTagKey(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
 	vars := mux.Vars(r)
 	tagk := vars["tagk"]
-	tagValues, err := schedule.Search.TagValuesByTagKey(tagk, time.Duration(schedule.Conf.SearchSince))
+	tagValues, err := schedule.Search.TagValuesByTagKey(tagk, schedule.SystemConf.GetSearchSince())
 	if err != nil {
 		return nil, err
 	}
@@ -86,15 +105,15 @@ func TagValuesByTagKey(t miniprofiler.Timer, w http.ResponseWriter, r *http.Requ
 	vars := mux.Vars(r)
 	tagk := vars["tagk"]
 	s := r.FormValue("since")
-	var since opentsdb.Duration
+	var since time.Duration
 	if s == "default" {
-		since = schedule.Conf.SearchSince
+		since = schedule.SystemConf.GetSearchSince()
 	} else if s != "" {
-		var err error
-		since, err = opentsdb.ParseDuration(s)
+		td, err := opentsdb.ParseDuration(s)
 		if err != nil {
 			return nil, err
 		}
+		since = time.Duration(td)
 	}
-	return schedule.Search.TagValuesByTagKey(tagk, time.Duration(since))
+	return schedule.Search.TagValuesByTagKey(tagk, since)
 }

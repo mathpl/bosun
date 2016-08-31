@@ -15,7 +15,7 @@ var bosunApp = angular.module('bosunApp', [
     'ui.ace',
 ]);
 
-bosunApp.config(['$routeProvider', '$locationProvider', '$httpProvider', function($routeProvider: ng.route.IRouteProvider, $locationProvider: ng.ILocationProvider, $httpProvider: ng.IHttpProvider) {
+bosunApp.config(['$routeProvider', '$locationProvider', '$httpProvider', function ($routeProvider: ng.route.IRouteProvider, $locationProvider: ng.ILocationProvider, $httpProvider: ng.IHttpProvider) {
     $locationProvider.html5Mode({
         enabled: true,
         requireBase: false
@@ -91,9 +91,9 @@ bosunApp.config(['$routeProvider', '$locationProvider', '$httpProvider', functio
         otherwise({
             redirectTo: '/',
         });
-    $httpProvider.interceptors.push(function($q) {
+    $httpProvider.interceptors.push(function ($q) {
         return {
-            'request': function(config) {
+            'request': function (config) {
                 config.headers['X-Miniprofiler'] = 'true';
                 return config;
             },
@@ -106,8 +106,8 @@ interface IRootScope extends ng.IScope {
     shortlink: boolean;
 }
 
-bosunApp.run(['$location', '$rootScope', function($location: ng.ILocationService, $rootScope: IRootScope) {
-    $rootScope.$on('$routeChangeSuccess', function(event, current, previous) {
+bosunApp.run(['$location', '$rootScope', function ($location: ng.ILocationService, $rootScope: IRootScope) {
+    $rootScope.$on('$routeChangeSuccess', function (event, current, previous) {
         $rootScope.title = current.$$route.title;
         $rootScope.shortlink = false;
     });
@@ -137,12 +137,14 @@ interface IBosunScope extends RootScope {
     values: any;
     annotateEnabled: boolean;
     opentsdbEnabled: boolean;
+    saveEnabled: boolean;
+    quiet: boolean;
     version: any;
+    init: any;
 }
 
-
-bosunControllers.controller('BosunCtrl', ['$scope', '$route', '$http', '$q', '$rootScope', function($scope: IBosunScope, $route: ng.route.IRouteService, $http: ng.IHttpService, $q: ng.IQService, $rootScope: IRootScope) {
-    $scope.$on('$routeChangeSuccess', function(event, current, previous) {
+bosunControllers.controller('BosunCtrl', ['$scope', '$route', '$http', '$q', '$rootScope', function ($scope: IBosunScope, $route: ng.route.IRouteService, $http: ng.IHttpService, $q: ng.IQService, $rootScope: IRootScope) {
+    $scope.$on('$routeChangeSuccess', function (event, current, previous) {
         $scope.stop(true);
     });
     $scope.active = (v: string) => {
@@ -154,21 +156,14 @@ bosunControllers.controller('BosunCtrl', ['$scope', '$route', '$http', '$q', '$r
         }
         return null;
     };
-    $http.get("/api/annotate")
-        .success((data: any) => {
-            $scope.annotateEnabled = data;
-        })
-        .error((data: any) => {
-            console.log(data);
-        });
-    $http.get("/api/opentsdb/version")
-        .success((data: any) => {
-            $scope.version = data;
-            $scope.opentsdbEnabled = $scope.version.Major != 0 && $scope.version.Minor != 0;
-        })
-        .error((data: any) => {
-            console.log(data);
-        });;
+    $scope.init = (settings: any) => {
+        $scope.saveEnabled = settings.SaveEnabled;
+        $scope.annotateEnabled = settings.AnnotateEnabled;
+        $scope.quiet = settings.Quiet;
+        $scope.version = settings.Version;
+        $scope.opentsdbEnabled = $scope.version.Major != 0 && $scope.version.Minor != 0;
+    }
+
     $scope.json = (v: any) => {
         return JSON.stringify(v, null, '  ');
     };
@@ -329,6 +324,7 @@ bosunControllers.controller('BosunCtrl', ['$scope', '$route', '$http', '$q', '$r
     };
 }]);
 
+
 var tsdbDateFormat = 'YYYY/MM/DD-HH:mm:ss';
 
 interface MomentStatic {
@@ -354,6 +350,32 @@ moment.locale('en', {
         yy: "%dy"
     },
 });
+
+function ruleUrl(ak, fromTime) {
+    var openBrack = ak.indexOf("{");
+    var closeBrack = ak.indexOf("}");
+    var alertName = ak.substr(0, openBrack);
+    var template = ak.substring(openBrack + 1, closeBrack);
+    var url = '/api/rule?' +
+        'alert=' + encodeURIComponent(alertName) +
+        '&from=' + encodeURIComponent(fromTime.format()) +
+        '&template_group=' + encodeURIComponent(template);
+    return url
+}
+
+function configUrl(ak, fromTime) {
+    var openBrack = ak.indexOf("{");
+    var closeBrack = ak.indexOf("}");
+    var alertName = ak.substr(0, openBrack);
+    var template = ak.substring(openBrack + 1, closeBrack);
+    // http://bosun/config?alert=haproxy.server.downtime.ny&fromDate=2016-07-10&fromTime=21%3A03
+    var url = '/config?' +
+        'alert=' + encodeURIComponent(alertName) +
+        '&fromDate=' + encodeURIComponent(fromTime.format("YYYY-MM-DD")) +
+        '&fromTime=' + encodeURIComponent(fromTime.format("HH:mm"));
+    return url
+}
+
 
 // From http://www.quirksmode.org/js/cookies.html
 
@@ -417,10 +439,12 @@ function setShowAnnotations(yes) {
     createCookie('annotations-show', yes, 1000);
 }
 
+
+
 // from: http://stackoverflow.com/a/15267754/864236
 
-bosunApp.filter('reverse', function() {
-    return function(items) {
+bosunApp.filter('reverse', function () {
+    return function (items) {
         if (!angular.isArray(items)) {
             return [];
         }

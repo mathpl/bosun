@@ -70,7 +70,7 @@ type DataPoint struct {
 
 // MarshalJSON verifies d is valid and converts it to JSON.
 func (d *DataPoint) MarshalJSON() ([]byte, error) {
-	if err := d.clean(); err != nil {
+	if err := d.Clean(); err != nil {
 		return nil, err
 	}
 	return json.Marshal(struct {
@@ -89,10 +89,11 @@ func (d *DataPoint) MarshalJSON() ([]byte, error) {
 // Valid returns whether d contains valid data (populated fields, valid tags)
 // for submission to OpenTSDB.
 func (d *DataPoint) Valid() bool {
-	if d.Metric == "" || d.Timestamp == 0 || d.Value == nil || !d.Tags.Valid() {
+	if d.Metric == "" || !ValidTSDBString(d.Metric) || d.Timestamp == 0 || d.Value == nil || !d.Tags.Valid() {
 		return false
 	}
-	if _, err := strconv.ParseFloat(fmt.Sprint(d.Value), 64); err != nil {
+	f, err := strconv.ParseFloat(fmt.Sprint(d.Value), 64)
+	if err != nil || math.IsNaN(f) {
 		return false
 	}
 	return true
@@ -242,7 +243,7 @@ func (t TagSet) Valid() bool {
 	return err == nil
 }
 
-func (d *DataPoint) clean() error {
+func (d *DataPoint) Clean() error {
 	if err := d.Tags.Clean(); err != nil {
 		return fmt.Errorf("cleaning tags for metric %s: %s", d.Metric, err)
 	}
@@ -273,6 +274,9 @@ func (d *DataPoint) clean() error {
 			}
 		}
 	}
+	if !d.Valid() {
+		return fmt.Errorf("datapoint is invalid")
+	}
 	return nil
 }
 
@@ -289,6 +293,9 @@ func (t TagSet) Clean() error {
 		vc, err := Clean(v)
 		if err != nil {
 			return fmt.Errorf("cleaning value %s for tag %s: %s", v, k, err)
+		}
+		if kc == "" || vc == "" {
+			return fmt.Errorf("cleaning value [%s] for tag [%s] result in an empty string", v, k)
 		}
 		if kc != k || vc != v {
 			delete(t, k)
@@ -307,14 +314,18 @@ func Clean(s string) (string, error) {
 // tag values and replaces them.
 // See: http://opentsdb.net/docs/build/html/user_guide/writing.html#metrics-and-tags
 func Replace(s, replacement string) (string, error) {
+	if !needsReplacement(s) {
+		return s, nil
+	}
 	var c string
 	replaced := false
 	for len(s) > 0 {
 		r, size := utf8.DecodeRuneInString(s)
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' || r == '/' {
+		if isRuneValid(r) {
 			c += string(r)
 			replaced = false
 		} else if !replaced {
+			//only replace the first occurence of an invalid character.
 			c += replacement
 			replaced = true
 		}
@@ -324,6 +335,19 @@ func Replace(s, replacement string) (string, error) {
 		return "", fmt.Errorf("clean result is empty")
 	}
 	return c, nil
+}
+
+func needsReplacement(s string) bool {
+	for _, r := range []rune(s) {
+		if !isRuneValid(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRuneValid(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' || r == '/'
 }
 
 // MustReplace is like Replace, but returns an empty string on error.
@@ -449,25 +473,36 @@ func ParseRequest(req string, version Version) (*Request, error) {
 	return &r, nil
 }
 
-var qRE2_1 = regexp.MustCompile(`^(\w+):(?:(\w+-\w+):)?(?:(rate.*):)?([\w./-]+)(?:\{([\w./,=*-|]+)\})?$`)
-var qRE2_2 = regexp.MustCompile(`^(\w+):(?:(\w+-\w+):)?(?:(rate.*):)?([\w./-]+)(?:\{([^}]+)?\})?(?:\{([^}]+)?\})?$`)
+var qRE2_1 = regexp.MustCompile(`^(?P<aggregator>\w+):(?:(?P<downsample>\w+-\w+):)?(?:(?P<rate>rate.*):)?(?P<metric>[\w./-]+)(?:\{([\w./,=*-|]+)\})?$`)
+var qRE2_2 = regexp.MustCompile(`^(?P<aggregator>\w+):(?:(?P<downsample>\w+-\w+(?:-(?:\w+))?):)?(?:(?P<rate>rate.*):)?(?P<metric>[\w./-]+)(?:\{([^}]+)?\})?(?:\{([^}]+)?\})?$`)
 
 // ParseQuery parses OpenTSDB queries of the form: avg:rate:cpu{k=v}. Validation
 // errors will be returned along with a valid Query.
 func ParseQuery(query string, version Version) (q *Query, err error) {
+	var regExp = qRE2_1
 	q = new(Query)
-	m := qRE2_1.FindStringSubmatch(query)
 	if version.FilterSupport() {
-		m = qRE2_2.FindStringSubmatch(query)
+		regExp = qRE2_2
 	}
+
+	m := regExp.FindStringSubmatch(query)
+
 	if m == nil {
 		return nil, fmt.Errorf("opentsdb: bad query format: %s", query)
 	}
-	q.Aggregator = m[1]
-	q.Downsample = m[2]
-	q.Rate = strings.HasPrefix(m[3], "rate")
-	if q.Rate && len(m[3]) > 4 {
-		s := m[3][4:]
+
+	result := make(map[string]string)
+	for i, name := range regExp.SubexpNames() {
+		if i != 0 {
+			result[name] = m[i]
+		}
+	}
+
+	q.Aggregator = result["aggregator"]
+	q.Downsample = result["downsample"]
+	q.Rate = strings.HasPrefix(result["rate"], "rate")
+	if q.Rate && len(result["rate"]) > 4 {
+		s := result["rate"][4:]
 		if !strings.HasSuffix(s, "}") || !strings.HasPrefix(s, "{") {
 			err = fmt.Errorf("opentsdb: invalid rate options")
 			return
@@ -487,20 +522,23 @@ func ParseQuery(query string, version Version) (q *Query, err error) {
 			}
 		}
 	}
-	q.Metric = m[4]
-	if !version.FilterSupport() {
-		if len(m) > 5 && m[5] != "" {
-			tags, e := ParseTags(m[5])
-			if e != nil {
-				err = e
-				if tags == nil {
-					return
-				}
+	q.Metric = result["metric"]
+
+	if !version.FilterSupport() && len(m) > 5 && m[5] != "" {
+		tags, e := ParseTags(m[5])
+		if e != nil {
+			err = e
+			if tags == nil {
+				return
 			}
-			q.Tags = tags
 		}
+		q.Tags = tags
+	}
+
+	if !version.FilterSupport() {
 		return
 	}
+
 	// OpenTSDB Greater than 2.2, treating as filters
 	q.GroupByTags = make(TagSet)
 	q.Filters = make([]Filter, 0)
@@ -514,10 +552,11 @@ func ParseQuery(query string, version Version) (q *Query, err error) {
 	if m[6] != "" {
 		f, err := ParseFilters(m[6], false, q)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to parse filter(s): %s", m[5])
+			return nil, fmt.Errorf("Failed to parse filter(s): %s", m[6])
 		}
 		q.Filters = append(q.Filters, f...)
 	}
+
 	return
 }
 
@@ -574,7 +613,7 @@ func ParseTags(t string) (TagSet, error) {
 			if i > 0 {
 				continue
 			}
-			if !ValidTag(sp[i]) {
+			if !ValidTSDBString(sp[i]) {
 				err = fmt.Errorf("invalid character in %s", sp[i])
 			}
 		}
@@ -582,7 +621,7 @@ func ParseTags(t string) (TagSet, error) {
 			if s == "*" {
 				continue
 			}
-			if !ValidTag(s) {
+			if !ValidTSDBString(s) {
 				err = fmt.Errorf("invalid character in %s", sp[1])
 			}
 		}
@@ -594,19 +633,13 @@ func ParseTags(t string) (TagSet, error) {
 	return ts, err
 }
 
-// ValidTag returns true if s is a valid metric or tag.
-func ValidTag(s string) bool {
+// ValidTSDBString returns true if s is a valid metric or tag.
+func ValidTSDBString(s string) bool {
 	if s == "" {
 		return false
 	}
 	for _, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z':
-		case c >= 'A' && c <= 'Z':
-		case c >= '0' && c <= '9':
-		case strings.ContainsAny(string(c), `-_./`):
-		case unicode.IsLetter(c):
-		default:
+		if !isRuneValid(c) {
 			return false
 		}
 	}
@@ -940,6 +973,23 @@ type Version struct {
 	Minor int64
 }
 
+func (v *Version) UnmarshalText(text []byte) error {
+	var err error
+	split := strings.Split(string(text), ".")
+	if len(split) != 2 {
+		return fmt.Errorf("invalid opentsdb version, expected number.number, (i.e 2.2) got %v", text)
+	}
+	v.Major, err = strconv.ParseInt(split[0], 10, 64)
+	if err != nil {
+		return fmt.Errorf("could not parse major version number for opentsdb version: %v", split[0])
+	}
+	v.Minor, err = strconv.ParseInt(split[0], 10, 64)
+	if err != nil {
+		return fmt.Errorf("could not parse minor version number for opentsdb version: %v", split[1])
+	}
+	return nil
+}
+
 func (v Version) FilterSupport() bool {
 	return v.Major >= 2 && v.Minor >= 2
 }
@@ -1002,11 +1052,18 @@ func FilterTags(r *Request, tr ResponseSet) {
 	}
 	for _, resp := range tr {
 		for k := range resp.Tags {
-			if _, present := r.Queries[0].Tags[k]; !present {
-				if _, present := r.Queries[0].GroupByTags[k]; !present {
-					delete(resp.Tags, k)
+			_, inTags := r.Queries[0].Tags[k]
+			inGroupBy := false
+			for _, filter := range r.Queries[0].Filters {
+				if filter.GroupBy && filter.TagK == k {
+					inGroupBy = true
+					break
 				}
 			}
+			if inTags || inGroupBy {
+				continue
+			}
+			delete(resp.Tags, k)
 		}
 	}
 }

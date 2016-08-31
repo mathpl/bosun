@@ -12,13 +12,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"bosun.org/_version"
+
 	"bosun.org/cmd/bosun/conf"
+	"bosun.org/cmd/bosun/conf/rule"
+	"bosun.org/cmd/bosun/ping"
 	"bosun.org/cmd/bosun/sched"
 	"bosun.org/cmd/bosun/web"
 	"bosun.org/collect"
@@ -58,19 +60,28 @@ func init() {
 	http.DefaultClient = client
 	opentsdb.DefaultClient = client
 	graphite.DefaultClient = client
+	collect.DefaultClient = &http.Client{
+		Transport: &bosunHttpTransport{
+			"Bosun/" + version.ShortVersion(),
+			&httpcontrol.Transport{
+				RequestTimeout: time.Minute,
+			},
+		},
+	}
 }
 
 var (
-	flagConf     = flag.String("c", "dev.conf", "config file location")
+	flagConf     = flag.String("c", "bosun.toml", "system config file location")
 	flagTest     = flag.Bool("t", false, "test for valid config; exits with 0 on success, else 1")
 	flagWatch    = flag.Bool("w", false, "watch .go files below current directory and exit; also build typescript files on change")
 	flagReadonly = flag.Bool("r", false, "readonly-mode: don't write or relay any OpenTSDB metrics")
 	flagQuiet    = flag.Bool("q", false, "quiet-mode: don't send any notifications except from the rule test page")
 	flagNoChecks = flag.Bool("n", false, "no-checks: don't run the checks at the run interval")
 	flagDev      = flag.Bool("dev", false, "enable dev mode: use local resources; no syslog")
+	flagSkipLast = flag.Bool("skiplast", false, "skip loading last datapoints from and to redis: useful for speeding up bosun startup time during development")
 	flagVersion  = flag.Bool("version", false, "Prints the version and exits")
 
-	mains []func()
+	mains []func() // Used to hook up syslog on *nix systems
 )
 
 func main() {
@@ -82,17 +93,25 @@ func main() {
 	for _, m := range mains {
 		m()
 	}
-	runtime.GOMAXPROCS(runtime.NumCPU())
-	c, err := conf.ParseFile(*flagConf)
+	systemConf, err := conf.LoadSystemConfigFile(*flagConf)
+	if err != nil {
+		slog.Fatal(err)
+	}
+	sysProvider, err := systemConf.GetSystemConfProvider()
+	if err != nil {
+		slog.Fatal(err)
+	}
+	ruleConf, err := rule.ParseFile(sysProvider.GetRuleFilePath(), systemConf.EnabledBackends())
 	if err != nil {
 		slog.Fatal(err)
 	}
 	if *flagTest {
 		os.Exit(0)
 	}
+	var ruleProvider conf.RuleConfProvider = ruleConf
 	httpListen := &url.URL{
 		Scheme: "http",
-		Host:   c.HTTPListen,
+		Host:   sysProvider.GetHTTPListen(),
 	}
 	if strings.HasPrefix(httpListen.Host, ":") {
 		httpListen.Host = "localhost" + httpListen.Host
@@ -100,27 +119,27 @@ func main() {
 	if err := metadata.Init(httpListen, false); err != nil {
 		slog.Fatal(err)
 	}
-	if err := sched.Load(c); err != nil {
+	if err := sched.Load(sysProvider, ruleProvider, *flagSkipLast, *flagQuiet); err != nil {
 		slog.Fatal(err)
 	}
-	if c.RelayListen != "" {
+	if sysProvider.GetRelayListen() != "" {
 		go func() {
 			mux := http.NewServeMux()
 			mux.Handle("/api/", util.NewSingleHostProxy(httpListen))
 			s := &http.Server{
-				Addr:    c.RelayListen,
+				Addr:    sysProvider.GetRelayListen(),
 				Handler: mux,
 			}
 			slog.Fatal(s.ListenAndServe())
 		}()
 	}
-	if c.TSDBHost != "" {
+	if sysProvider.GetTSDBHost() != "" {
 		if err := collect.Init(httpListen, "bosun"); err != nil {
 			slog.Fatal(err)
 		}
 		tsdbHost := &url.URL{
 			Scheme: "http",
-			Host:   c.TSDBHost,
+			Host:   sysProvider.GetTSDBHost(),
 		}
 		if *flagReadonly {
 			rp := util.NewSingleHostProxy(tsdbHost)
@@ -133,24 +152,80 @@ func main() {
 			}))
 			slog.Infoln("readonly relay at", ts.URL, "to", tsdbHost)
 			tsdbHost, _ = url.Parse(ts.URL)
-			c.TSDBHost = tsdbHost.Host
+			sysProvider.SetTSDBHost(tsdbHost.Host)
 		}
 	}
-	if c.InternetProxy != "" {
-		web.InternetProxy, err = url.Parse(c.InternetProxy)
+	if systemConf.GetPing() {
+		go ping.PingHosts(sched.DefaultSched.Search, systemConf.GetPingDuration())
+	}
+	if sysProvider.GetInternetProxy() != "" {
+		web.InternetProxy, err = url.Parse(sysProvider.GetInternetProxy())
 		if err != nil {
 			slog.Fatalf("InternetProxy error: %s", err)
 		}
 	}
-	if *flagQuiet {
-		c.Quiet = true
+	var cmdHook conf.SaveHook
+	if hookPath := sysProvider.GetCommandHookPath(); hookPath != "" {
+		cmdHook, err = conf.MakeSaveCommandHook(hookPath)
+		if err != nil {
+			slog.Fatal(err)
+		}
+		ruleProvider.SetSaveHook(cmdHook)
 	}
-	go func() { slog.Fatal(web.Listen(c.HTTPListen, *flagDev, c.TSDBHost)) }()
+	var reload func() error
+	reloading := make(chan bool, 1) // a lock that we can give up acquiring
+	reload = func() error {
+		select {
+		case reloading <- true:
+			// Got lock
+		default:
+			return fmt.Errorf("not reloading, reload in progress")
+		}
+		defer func() {
+			<-reloading
+		}()
+		newConf, err := rule.ParseFile(sysProvider.GetRuleFilePath(), sysProvider.EnabledBackends())
+		if err != nil {
+			return err
+		}
+		newConf.SetSaveHook(cmdHook)
+		newConf.SetReload(reload)
+		oldSched := sched.DefaultSched
+		oldDA := oldSched.DataAccess
+		oldSearch := oldSched.Search
+		sched.Close(true)
+		sched.Reset()
+		newSched := sched.DefaultSched
+		newSched.Search = oldSearch
+		newSched.DataAccess = oldDA
+		slog.Infoln("schedule shutdown, loading new schedule")
+
+		// Load does not set the DataAccess or Search if it is already set
+		if err := sched.Load(sysProvider, newConf, *flagSkipLast, *flagQuiet); err != nil {
+			slog.Fatal(err)
+		}
+		web.ResetSchedule() // Signal web to point to the new DefaultSchedule
+		go func() {
+			slog.Infoln("running new schedule")
+			if !*flagNoChecks {
+				sched.Run()
+			}
+		}()
+		slog.Infoln("config reload complete")
+		return nil
+	}
+
+	ruleProvider.SetReload(reload)
+
+	go func() {
+		slog.Fatal(web.Listen(sysProvider.GetHTTPListen(), *flagDev, sysProvider.GetTSDBHost(), reload))
+	}()
 	go func() {
 		if !*flagNoChecks {
 			sched.Run()
 		}
 	}()
+
 	go func() {
 		sc := make(chan os.Signal, 1)
 		signal.Notify(sc, os.Interrupt, syscall.SIGTERM)
@@ -163,12 +238,13 @@ func main() {
 			killing = true
 			go func() {
 				slog.Infoln("Interrupt: closing down...")
-				sched.Close()
+				sched.Close(false)
 				slog.Infoln("done")
 				os.Exit(1)
 			}()
 		}
 	}()
+
 	if *flagWatch {
 		watch(".", "*.go", quit)
 		watch(filepath.Join("web", "static", "templates"), "*.html", web.RunEsc)

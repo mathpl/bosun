@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"bosun.org/cmd/scollector/conf"
 	"bosun.org/metadata"
 	"bosun.org/opentsdb"
+	"bosun.org/slog"
 	"bosun.org/util"
 )
 
@@ -117,6 +120,9 @@ var (
 	WatchProcessesDotNet = func() {}
 
 	KeepalivedCommunity = ""
+
+	//TotalScollectorMemory stores the total memory used by Scollector (including CGO and WMI)
+	TotalScollectorMemoryMB uint64
 )
 
 func init() {
@@ -236,18 +242,27 @@ func AddTS(md *opentsdb.MultiDataPoint, name string, ts int64, value interface{}
 	if skipMetric(name) {
 		return
 	}
-	if b, ok := value.(bool); ok {
-		if b {
-			value = 1
-		} else {
-			value = 0
-		}
-	}
+
 	tags := t.Copy()
 	if host, present := tags["host"]; !present {
 		tags["host"] = util.Hostname
 	} else if host == "" {
 		delete(tags, "host")
+	}
+	// if tags are not cleanable, log a message and skip it
+	if err := tags.Clean(); err != nil {
+		line := ""
+		//attempt to log where Add was called from
+		if _, filename, l, ok := runtime.Caller(1); ok {
+			if filepath.Base(filename) == "collectors.go" {
+				_, filename, l, ok = runtime.Caller(2)
+			}
+			if ok {
+				line = fmt.Sprintf("%s:%d", filepath.Base(filename), l)
+			}
+		}
+		slog.Errorf("Invalid tagset discovered: %s. Skipping datapoint. Added from: %s", tags.String(), line)
+		return
 	}
 	if rate != metadata.Unknown {
 		metadata.AddMeta(name, nil, "rate", rate, false)
@@ -258,8 +273,14 @@ func AddTS(md *opentsdb.MultiDataPoint, name string, ts int64, value interface{}
 	if desc != "" {
 		metadata.AddMeta(name, tags, "desc", desc, false)
 	}
-
 	tags = AddTags.Copy().Merge(tags)
+	if b, ok := value.(bool); ok {
+		if b {
+			value = 1
+		} else {
+			value = 0
+		}
+	}
 	d := opentsdb.DataPoint{
 		Metric:    name,
 		Timestamp: ts,

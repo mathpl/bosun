@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +72,7 @@ const (
 	Fraction             = "fraction"
 	Get                  = "gets"
 	GetExists            = "get exists"
+	Incident             = "incidents"
 	Interupt             = "interupts"
 	InProgress           = "in progress"
 	Item                 = "items"
@@ -83,6 +85,7 @@ const (
 	Merge                = "merges"
 	Message              = "messages"
 	MilliSecond          = "milliseconds"
+	Nanosecond           = "nanoseconds"
 	Node                 = "nodes"
 	Ok                   = "ok" // "OK" or not status, 0 = ok, 1 = not ok
 	Operation            = "Operations"
@@ -118,6 +121,7 @@ const (
 	Thread               = "threads"
 	Timestamp            = "timestamp"
 	Transition           = "transitions"
+	USD                  = "US dollars"
 	V                    = "V" // Volts
 	V10                  = "tenth-Volts"
 	Vulnerabilities      = "vulnerabilities"
@@ -194,6 +198,9 @@ func Init(u *url.URL, debug bool) error {
 	mh, err := u.Parse("/api/metadata/put")
 	if err != nil {
 		return err
+	}
+	if strings.HasPrefix(mh.Host, ":") {
+		mh.Host = "localhost" + mh.Host
 	}
 	metahost = mh.String()
 	metadebug = debug

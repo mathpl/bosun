@@ -17,9 +17,9 @@ import (
 	"bosun.org/opentsdb"
 	"github.com/MiniProfiler/go/miniprofiler"
 	svg "github.com/ajstarks/svgo"
+	"github.com/bosun-monitor/annotate"
 	"github.com/bradfitz/slice"
 	"github.com/gorilla/mux"
-	"github.com/kylebrandt/annotate"
 	"github.com/vdobler/chart"
 	"github.com/vdobler/chart/svgg"
 )
@@ -122,7 +122,7 @@ func Graph(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interf
 			}
 		}
 		queries[i] = fmt.Sprintf(`q("%v", "%v", "%v")`, q, start, end)
-		if !schedule.Conf.TSDBContext().Version().FilterSupport() {
+		if !schedule.SystemConf.GetTSDBContext().Version().FilterSupport() {
 			if err := schedule.Search.Expand(q); err != nil {
 				return nil, err
 			}
@@ -131,7 +131,7 @@ func Graph(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interf
 	var tr opentsdb.ResponseSet
 	b, _ := json.MarshalIndent(oreq, "", "  ")
 	t.StepCustomTiming("tsdb", "query", string(b), func() {
-		h := schedule.Conf.TSDBHost
+		h := schedule.SystemConf.GetTSDBHost()
 		if h == "" {
 			err = fmt.Errorf("tsdbHost not set")
 			return
@@ -182,20 +182,23 @@ func Graph(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interf
 		return nil, nil
 	}
 	var a []annotate.Annotation
-	if schedule.Conf.AnnotateEnabled() {
-		a, err = annotateBackend.GetAnnotations(&startT, &endT, "", "", "", "", "")
+	warnings := []string{}
+	if schedule.SystemConf.AnnotateEnabled() {
+		a, err = annotateBackend.GetAnnotations(&startT, &endT)
 		if err != nil {
-			return nil, err
+			warnings = append(warnings, fmt.Sprintf("unable to get annotations: %v", err))
 		}
 	}
 	return struct {
 		Queries     []string
 		Series      []*chartSeries
 		Annotations []annotate.Annotation
+		Warnings    []string
 	}{
 		queries,
 		cs,
 		a,
+		warnings,
 	}, nil
 }
 
@@ -204,6 +207,7 @@ func Graph(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interf
 func ExprGraph(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (interface{}, error) {
 	vars := mux.Vars(r)
 	bs := vars["bs"]
+	format := vars["format"]
 	b, err := base64.StdEncoding.DecodeString(bs)
 	if err != nil {
 		return nil, err
@@ -228,24 +232,39 @@ func ExprGraph(t miniprofiler.Timer, w http.ResponseWriter, r *http.Request) (in
 		}
 		now = time.Unix(i, 0).UTC()
 	}
-	e, err := expr.New(q, schedule.Conf.Funcs())
+	e, err := expr.New(q, schedule.RuleConf.GetFuncs(schedule.SystemConf.EnabledBackends()))
 	if err != nil {
 		return nil, err
 	} else if e.Root.Return() != models.TypeSeriesSet {
 		return nil, fmt.Errorf("egraph: requires an expression that returns a series")
 	}
 	// it may not strictly be necessary to recreate the contexts each time, but we do to be safe
-	tsdbContext := schedule.Conf.TSDBContext()
-	graphiteContext := schedule.Conf.GraphiteContext()
-	ls := schedule.Conf.LogstashElasticHosts
-	influx := schedule.Conf.InfluxConfig
-	es := schedule.Conf.ElasticHosts
-	res, _, err := e.Execute(tsdbContext, graphiteContext, ls, es, influx, cacheObj, t, now, autods, false, schedule.Search, nil, nil)
+	backends := &expr.Backends{
+		TSDBContext:     schedule.SystemConf.GetTSDBContext(),
+		GraphiteContext: schedule.SystemConf.GetGraphiteContext(),
+		InfluxConfig:    schedule.SystemConf.GetInfluxContext(),
+		LogstashHosts:   schedule.SystemConf.GetLogstashContext(),
+		ElasticHosts:    schedule.SystemConf.GetElasticContext(),
+	}
+	providers := &expr.BosunProviders{
+		Cache:     cacheObj,
+		Search:    schedule.Search,
+		Squelched: nil,
+		History:   nil,
+	}
+	res, _, err := e.Execute(backends, providers, t, now, autods, false)
 	if err != nil {
 		return nil, err
 	}
-	if err := schedule.ExprSVG(t, w, 800, 600, "", res.Results); err != nil {
-		return nil, err
+	switch format {
+	case "svg":
+		if err := schedule.ExprSVG(t, w, 800, 600, "", res.Results); err != nil {
+			return nil, err
+		}
+	case "png":
+		if err := schedule.ExprPNG(t, w, 800, 600, "", res.Results); err != nil {
+			return nil, err
+		}
 	}
 	return nil, nil
 }
