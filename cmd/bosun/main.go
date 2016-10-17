@@ -17,7 +17,8 @@ import (
 	"syscall"
 	"time"
 
-	"bosun.org/_version"
+	version "bosun.org/_version"
+
 	"bosun.org/cmd/bosun/conf"
 	"bosun.org/cmd/bosun/sched"
 	"bosun.org/cmd/bosun/web"
@@ -44,13 +45,13 @@ func (t *bosunHttpTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return t.RoundTripper.RoundTrip(req)
 }
 
-func init() {
+func initDefaultClients(c *conf.Conf) {
 	client := &http.Client{
 		Transport: &bosunHttpTransport{
 			"Bosun/" + version.ShortVersion(),
 			&httpcontrol.Transport{
 				Proxy:          http.ProxyFromEnvironment,
-				RequestTimeout: time.Minute,
+				RequestTimeout: c.RequestTimeout,
 				MaxTries:       3,
 			},
 		},
@@ -90,6 +91,9 @@ func main() {
 	if *flagTest {
 		os.Exit(0)
 	}
+
+	initDefaultClients(c)
+
 	httpListen := &url.URL{
 		Scheme: "http",
 		Host:   c.ReportMetricsHost,

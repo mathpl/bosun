@@ -56,6 +56,7 @@ type Conf struct {
 
 	TimeAndDate      []int // timeanddate.com cities list
 	ResponseLimit    int64
+	RequestTimeout   time.Duration // Timeout on request ot OpenTSDB
 	SearchSince      opentsdb.Duration
 	UnknownTemplate  *Template
 	UnknownThreshold int
@@ -381,6 +382,7 @@ func New(name, text string) (c *Conf, err error) {
 		MinGroupSize:     5,
 		PingDuration:     time.Hour * 24,
 		ResponseLimit:    1 << 20, // 1MB
+		RequestTimeout:   time.Minute,
 		SearchSince:      opentsdb.Day * 3,
 		TSDBVersion:      &opentsdb.Version2_1,
 		UnknownThreshold: 5,
@@ -548,6 +550,12 @@ func (c *Conf) loadGlobal(p *parse.PairNode) {
 			c.errorf("responseLimit must be > 0")
 		}
 		c.ResponseLimit = i
+	case "requestTimeout":
+		s, err := time.ParseDuration(v)
+		if err != nil {
+			c.error(err)
+		}
+		c.RequestTimeout = s
 	case "defaultRunEvery":
 		var err error
 		c.DefaultRunEvery, err = strconv.Atoi(v)
