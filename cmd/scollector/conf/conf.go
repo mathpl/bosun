@@ -69,6 +69,7 @@ type Conf struct {
 	ICMP            []ICMP
 	Vsphere         []Vsphere
 	AWS             []AWS
+	AzureEA         []AzureEA
 	Process         []ProcessParams
 	SystemdService  []ServiceParams
 	ProcessDotNet   []ProcessDotNet
@@ -79,6 +80,7 @@ type Conf struct {
 	RabbitMQ        []RabbitMQ
 	Nexpose         []Nexpose
 	GoogleAnalytics []GoogleAnalytics
+	GoogleWebmaster []GoogleWebmaster
 	Cadvisor        []Cadvisor
 	RedisCounters   []RedisCounters
 	ExtraHop        []ExtraHop
@@ -87,6 +89,7 @@ type Conf struct {
 	HadoopHost      string
 	Oracles         []Oracle
 	Fastly          []Fastly
+	Redis           []Redis
 }
 
 type HAProxy struct {
