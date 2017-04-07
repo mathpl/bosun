@@ -402,7 +402,17 @@ ConnectionString and Role, which are the same as using sqlplus.
 	    ConnectionString = "/@localnodevip/sid"
 	    Role = "sysdba"
 
->>>>>>> master
+RedisRemote (array of table, keys are Address, UserNano, PerCallStats and Tags): Address
+is the host:port of the redis instance to collect stats from. Use nano will generate
+redis.cmdstats_usec* instead of redis.cmdstats_msec. Tags allow to add tags to all metrics
+generated for this instances.
+
+	[[Redis]]
+	Address = "localhost:6379"
+	UseNano = true
+	PerCallStats = false
+	[Redis.Tags]
+	  role = "prod"
 
 Windows
 

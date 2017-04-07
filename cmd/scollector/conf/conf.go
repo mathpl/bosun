@@ -92,6 +92,7 @@ type Conf struct {
 	HadoopHost          string
 	Oracles             []Oracle
 	Fastly              []Fastly
+	Redis               []Redis
 }
 
 type HAProxy struct {
@@ -229,6 +230,13 @@ type Cadvisor struct {
 type RedisCounters struct {
 	Server   string
 	Database int
+}
+
+type Redis struct {
+	Address      string
+	UseNano      bool
+	PerCallStats bool
+	Tags         map[string]string
 }
 
 type ExtraHop struct {
