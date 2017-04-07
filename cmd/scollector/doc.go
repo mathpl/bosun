@@ -402,6 +402,7 @@ ConnectionString and Role, which are the same as using sqlplus.
 	    ConnectionString = "/@localnodevip/sid"
 	    Role = "sysdba"
 
+<<<<<<< HEAD
 RedisRemote (array of table, keys are Address, UserNano, PerCallStats and Tags): Address
 is the host:port of the redis instance to collect stats from. Use nano will generate
 redis.cmdstats_usec* instead of redis.cmdstats_msec. Tags allow to add tags to all metrics
@@ -413,6 +414,17 @@ generated for this instances.
 	PerCallStats = false
 	[Redis.Tags]
 	  role = "prod"
+
+Elasticsearch (array of tables, key are URL, IndicesFreq and IndexFilters): URL is
+the base path to an elasticsearch cluster. IndicesFreq is the frequency in seconds
+at which indices stats are polled (it's expensive), defaults to every 15 minutes.
+IndexFilters is an array of regular expressions that excludes indices matching from
+indices stats.
+
+	[[Elasticsearch]]
+	  URL = "http://localhost:9200/"
+	  IndicesFreq = 900
+	  IndexFilters = ["nostats.*"]
 
 Windows
 
