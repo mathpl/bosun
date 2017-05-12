@@ -144,7 +144,7 @@ func getFloat(unk interface{}) (float64, error) {
 func Match(search string, values []string) ([]string, error) {
 	v := strings.Replace(search, ".", `\.`, -1)
 	v = strings.Replace(v, "*", ".*", -1)
-	re, err := regexp.Compile(v)
+	re, err := regexp.Compile(fmt.Sprintf("^%s$", v))
 	if err != nil {
 		return nil, err
 	}
