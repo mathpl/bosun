@@ -1,7 +1,9 @@
 package collectors
 
 import (
+	"bytes"
 	"fmt"
+	"html/template"
 	"regexp"
 	"strings"
 
@@ -14,14 +16,19 @@ type replaceRe struct {
 }
 
 type TagOverride struct {
-	matchedTags map[string]*regexp.Regexp
-	tags        opentsdb.TagSet
-	replace     map[string]replaceRe
+	matchedTags  map[string]*regexp.Regexp
+	tags         opentsdb.TagSet
+	tagsTemplate map[string]*template.Template
+	replace      map[string]replaceRe
 }
 
 func (to *TagOverride) AddTagOverrides(sources map[string]string, t opentsdb.TagSet, replace map[string][]string) error {
 	if to.matchedTags == nil {
 		to.matchedTags = make(map[string]*regexp.Regexp)
+	}
+
+	if to.tagsTemplate == nil {
+		to.tagsTemplate = make(map[string]*template.Template)
 	}
 
 	if to.replace == nil {
@@ -40,6 +47,16 @@ func (to *TagOverride) AddTagOverrides(sources map[string]string, t opentsdb.Tag
 		to.tags = t.Copy()
 	} else {
 		to.tags = to.tags.Merge(t)
+	}
+
+	for tag, v := range to.tags {
+		if strings.Index(v, "{") != -1 {
+			tmpl, err := template.New(tag).Parse(v)
+			if err != nil {
+				return fmt.Errorf("Invalid template for tag override on tag %s: %s", tag, v)
+			}
+			to.tagsTemplate[tag] = tmpl
+		}
 	}
 
 	for tag, params := range replace {
@@ -81,7 +98,15 @@ func (to *TagOverride) ApplyTagOverrides(t opentsdb.TagSet) {
 		if v == "" {
 			delete(t, tag)
 		} else {
-			t[tag] = v
+			if tmpl, ok := to.tagsTemplate[tag]; ok {
+				result := new(bytes.Buffer)
+				err := tmpl.Execute(result, t)
+				if err == nil {
+					t[tag] = string(result.Bytes())
+				}
+			} else {
+				t[tag] = v
+			}
 		}
 	}
 
