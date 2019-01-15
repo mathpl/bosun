@@ -2185,9 +2185,7 @@ bosunControllers.controller('GraphCtrl', ['$scope', '$http', '$location', '$rout
         $scope.aggregators = ["sum", "min", "max", "avg", "dev", "zimsum", "mimmin", "minmax"];
         $scope.dsaggregators = ["", "sum", "min", "max", "avg", "dev", "zimsum", "mimmin", "minmax"];
         $scope.filters = ["auto", "iliteral_or", "iwildcard", "literal_or", "not_iliteral_or", "not_literal_or", "regexp", "wildcard"];
-        if ($scope.version.Major >= 2 && $scope.version.Minor >= 2) {
-            $scope.filterSupport = true;
-        }
+        $scope.filterSupport = true;
         $scope.rate_options = ["auto", "gauge", "counter", "rate"];
         $scope.canAuto = {};
         $scope.showAnnotations = (getShowAnnotations() == "true");
